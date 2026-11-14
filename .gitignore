@@ -39,3 +39,6 @@ database/seeds.sql
 Thumbs.db
 .vscode/
 .idea/
+
+# Go build output
+*.exe
