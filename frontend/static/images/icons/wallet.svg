@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="w_bg" x1="8" y1="12" x2="56" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#10B981" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+    <linearGradient id="w_flap" x1="10" y1="14" x2="54" y2="34" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34D399" />
+      <stop offset="100%" stop-color="#10B981" />
+    </linearGradient>
+    <linearGradient id="w_coin" x1="40" y1="26" x2="56" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FCD34D" />
+      <stop offset="100%" stop-color="#F59E0B" />
+    </linearGradient>
+    <linearGradient id="w_card" x1="16" y1="6" x2="48" y2="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#06B6D4" />
+      <stop offset="100%" stop-color="#0284C7" />
+    </linearGradient>
+    <filter id="w_shadow" x="0" y="2" width="64" height="64" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#059669" flood-opacity="0.3" />
+    </filter>
+  </defs>
+  <g filter="url(#w_shadow)">
+    <!-- Card sticking out -->
+    <rect x="18" y="10" width="28" height="18" rx="3" fill="url(#w_card)" opacity="0.95" />
+    <rect x="22" y="14" width="8" height="3" rx="1" fill="#FFFFFF" opacity="0.8" />
+    <!-- Wallet Body -->
+    <rect x="8" y="16" width="48" height="38" rx="8" fill="url(#w_bg)" />
+    <!-- Wallet Texture Overlay -->
+    <path d="M8 24C8 19.5817 11.5817 16 16 16H48C52.4183 16 56 19.5817 56 24V28H8V24Z" fill="url(#w_flap)" opacity="0.5" />
+    <!-- Stitching line -->
+    <path d="M12 20H52M12 50H52" stroke="#6EE7B7" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
+    <!-- Clasp / Pocket -->
+    <rect x="36" y="27" width="22" height="16" rx="4" fill="#047857" />
+    <!-- Gold Coin Button -->
+    <circle cx="47" cy="35" r="5.5" fill="url(#w_coin)" />
+    <circle cx="47" cy="35" r="3.5" stroke="#B45309" stroke-width="0.8" fill="none" />
+    <text x="47" y="37" font-size="5" font-weight="bold" fill="#78350F" text-anchor="middle" font-family="sans-serif">৳</text>
+  </g>
+</svg>

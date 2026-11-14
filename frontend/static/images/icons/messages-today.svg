@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="p_main" x1="10" y1="12" x2="54" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="50%" stop-color="#2563EB" />
+      <stop offset="100%" stop-color="#1D4ED8" />
+    </linearGradient>
+    <linearGradient id="p_wing" x1="24" y1="28" x2="52" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#93C5FD" />
+      <stop offset="100%" stop-color="#60A5FA" />
+    </linearGradient>
+    <linearGradient id="p_fold" x1="28" y1="36" x2="38" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1E40AF" />
+      <stop offset="100%" stop-color="#172554" />
+    </linearGradient>
+    <filter id="p_shadow" x="2" y="4" width="60" height="60" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="1" dy="4" stdDeviation="4" flood-color="#1D4ED8" flood-opacity="0.35" />
+    </filter>
+  </defs>
+  <g filter="url(#p_shadow)">
+    <!-- Speed streaks -->
+    <path d="M6 34C10 32 16 35 18 35" stroke="#93C5FD" stroke-width="2" stroke-linecap="round" opacity="0.7" />
+    <path d="M10 44C14 42 20 44 24 43" stroke="#60A5FA" stroke-width="2.5" stroke-linecap="round" opacity="0.8" />
+    <path d="M8 52C12 50 16 51 20 50" stroke="#38BDF8" stroke-width="1.8" stroke-linecap="round" opacity="0.6" />
+    <!-- Under Fold -->
+    <path d="M26 36L28 47L35 40L26 36Z" fill="url(#p_fold)" />
+    <!-- Main Body Wing -->
+    <path d="M54 12L12 32L26 36L54 12Z" fill="url(#p_main)" />
+    <!-- Top Wing -->
+    <path d="M54 12L26 36L35 40L54 12Z" fill="url(#p_wing)" />
+    <!-- Glow Sparkle -->
+    <circle cx="53" cy="13" r="2.5" fill="#FFFFFF" />
+    <circle cx="48" cy="18" r="1.2" fill="#E0F2FE" />
+  </g>
+</svg>

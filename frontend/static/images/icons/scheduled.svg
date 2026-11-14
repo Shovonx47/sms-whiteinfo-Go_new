@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="sc_bg" x1="10" y1="10" x2="54" y2="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#A855F7" />
+      <stop offset="50%" stop-color="#8B5CF6" />
+      <stop offset="100%" stop-color="#6D28D9" />
+    </linearGradient>
+    <linearGradient id="sc_rim" x1="12" y1="12" x2="52" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#DDD6FE" />
+      <stop offset="100%" stop-color="#C4B5FD" />
+    </linearGradient>
+    <filter id="sc_shadow" x="2" y="4" width="60" height="60" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="1" dy="4" stdDeviation="4" flood-color="#7C3AED" flood-opacity="0.35" />
+    </filter>
+  </defs>
+  <g filter="url(#sc_shadow)">
+    <!-- Outer Glow Circle -->
+    <circle cx="32" cy="32" r="22" fill="url(#sc_bg)" />
+    <!-- Inner Rim -->
+    <circle cx="32" cy="32" r="18" fill="#FFFFFF" fill-opacity="0.15" stroke="url(#sc_rim)" stroke-width="2" />
+    <!-- Center Dot -->
+    <circle cx="32" cy="32" r="2.8" fill="#FFFFFF" />
+    <!-- Clock Hands (Hour & Minute) -->
+    <path d="M32 32V20" stroke="#FFFFFF" stroke-width="2.8" stroke-linecap="round" />
+    <path d="M32 32L41 37" stroke="#FFFFFF" stroke-width="2.8" stroke-linecap="round" />
+    <!-- Tick Marks -->
+    <circle cx="32" cy="17" r="1.2" fill="#DDD6FE" />
+    <circle cx="47" cy="32" r="1.2" fill="#DDD6FE" />
+    <circle cx="32" cy="47" r="1.2" fill="#DDD6FE" />
+    <circle cx="17" cy="32" r="1.2" fill="#DDD6FE" />
+    <!-- Small SMS Badge Accent -->
+    <circle cx="48" cy="16" r="6" fill="#F43F5E" />
+    <path d="M46 14.5L50 14.5M46 16.5L49 16.5" stroke="#FFFFFF" stroke-width="1.2" stroke-linecap="round" />
+  </g>
+</svg>

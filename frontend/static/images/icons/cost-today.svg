@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="c_front" x1="16" y1="16" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FDE047" />
+      <stop offset="50%" stop-color="#F59E0B" />
+      <stop offset="100%" stop-color="#D97706" />
+    </linearGradient>
+    <linearGradient id="c_rim" x1="14" y1="14" x2="50" y2="50" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FEF08A" />
+      <stop offset="100%" stop-color="#B45309" />
+    </linearGradient>
+    <linearGradient id="c_back" x1="10" y1="24" x2="38" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FBBF24" />
+      <stop offset="100%" stop-color="#92400E" />
+    </linearGradient>
+    <filter id="c_shadow" x="4" y="6" width="56" height="56" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#D97706" flood-opacity="0.35" />
+    </filter>
+  </defs>
+  <g filter="url(#c_shadow)">
+    <!-- Back Coin 1 -->
+    <ellipse cx="22" cy="42" rx="12" ry="7" fill="url(#c_back)" />
+    <path d="M10 42V45C10 48.866 15.3726 52 22 52C28.6274 52 34 48.866 34 45V42C34 45.866 28.6274 49 22 49C15.3726 49 10 45.866 10 42Z" fill="#78350F" />
+    <!-- Back Coin 2 (higher) -->
+    <ellipse cx="22" cy="35" rx="12" ry="7" fill="url(#c_back)" />
+    <!-- Main Big Front Coin -->
+    <circle cx="39" cy="27" r="17" fill="url(#c_rim)" />
+    <circle cx="39" cy="27" r="14.5" fill="url(#c_front)" />
+    <!-- Inner concentric ring -->
+    <circle cx="39" cy="27" r="12" stroke="#FEF3C7" stroke-width="1.2" stroke-dasharray="2.5 1.5" fill="none" opacity="0.8" />
+    <!-- Taka Symbol ৳ -->
+    <text x="39" y="34" font-size="18" font-weight="900" fill="#78350F" text-anchor="middle" font-family="'Segoe UI', Roboto, sans-serif">৳</text>
+    <!-- Top Sparkle -->
+    <path d="M49 10L50.5 14L54.5 15.5L50.5 17L49 21L47.5 17L43.5 15.5L47.5 14L49 10Z" fill="#FEF08A" />
+  </g>
+</svg>

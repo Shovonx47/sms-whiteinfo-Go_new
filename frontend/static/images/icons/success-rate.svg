@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="s_bg" x1="12" y1="8" x2="52" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34D399" />
+      <stop offset="50%" stop-color="#10B981" />
+      <stop offset="100%" stop-color="#047857" />
+    </linearGradient>
+    <linearGradient id="s_rim" x1="10" y1="6" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FCD34D" />
+      <stop offset="100%" stop-color="#F59E0B" />
+    </linearGradient>
+    <linearGradient id="s_glow" x1="32" y1="12" x2="32" y2="36" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.4" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
+    </linearGradient>
+    <filter id="s_shadow" x="4" y="2" width="56" height="60" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#059669" flood-opacity="0.35" />
+    </filter>
+  </defs>
+  <g filter="url(#s_shadow)">
+    <!-- Golden Rim Shield -->
+    <path d="M32 6L49 13C49 28 42 45 32 54C22 45 15 28 15 13L32 6Z" fill="url(#s_rim)" />
+    <!-- Inner Green Shield -->
+    <path d="M32 9L46 15C46 27.5 40 42 32 50C24 42 18 27.5 18 15L32 9Z" fill="url(#s_bg)" />
+    <!-- Glossy Highlight -->
+    <path d="M32 10L44 15.5C44 23 41 33 32 37C23 33 20 23 20 15.5L32 10Z" fill="url(#s_glow)" />
+    <!-- Checkmark -->
+    <path d="M25 28L30 33L39 23" stroke="#FFFFFF" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" />
+    <!-- Small star sparkle -->
+    <path d="M45 8L46.5 12L50.5 13.5L46.5 15L45 19L43.5 15L39.5 13.5L43.5 12L45 8Z" fill="#FDE047" />
+  </g>
+</svg>
