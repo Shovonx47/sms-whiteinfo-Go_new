@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api.js';
 	import { toast } from '$lib/stores/toast.svelte.js';
-	import { exportToCsv } from '$lib/utils/export.js';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
@@ -11,6 +10,7 @@
 		name: string;
 		phone: string;
 		created_at: string;
+		updated_at?: string;
 	}
 
 	interface GroupDetail {
@@ -31,8 +31,22 @@
 	let contacts = $state<Contact[]>([]);
 	let loadingContacts = $state(true);
 	let contactSearch = $state('');
+	let selectedContactIds = $state<number[]>([]);
+	let exporting = $state(false);
 
 	// Modals
+	let viewGroupModalOpen = $state(false);
+	let bulkDetachModalOpen = $state(false);
+	let bulkDetaching = $state(false);
+
+	let attachModalOpen = $state(false);
+	let attachSearch = $state('');
+	let attachOptions = $state<Contact[]>([]);
+	let attachLoading = $state(false);
+	let attachSelectedIds = $state<number[]>([]);
+	let attaching = $state(false);
+	let attachSearchTimeout: ReturnType<typeof setTimeout> | null = null;
+
 	let addNumbersModalOpen = $state(false);
 	let rawNumbers = $state('');
 	let newContactName = $state('');
@@ -64,6 +78,7 @@
 
 	async function loadContacts() {
 		loadingContacts = true;
+		selectedContactIds = [];
 		try {
 			const res = await api.get<{ data: Contact[] }>(`/api/v1/customer/groups/${groupId}/contacts`);
 			contacts = res.data || [];
@@ -118,11 +133,14 @@
 		}
 		addingNumbers = true;
 		try {
-			const res = await api.post<{ valid_count: number; message: string }>(`/api/v1/customer/groups/${groupId}/contacts`, {
+			const res = await api.post<{ valid_count: number; invalid_count?: number; message: string }>(`/api/v1/customer/groups/${groupId}/contacts`, {
 				phone_numbers: rawNumbers.trim(),
 				name: newContactName.trim()
 			});
 			toast.success('Contacts Added', res.message || `Added contacts to group.`);
+			if ((res.invalid_count ?? 0) > 0) {
+				toast.warning('Notice', `${res.invalid_count} invalid number(s) were skipped.`);
+			}
 			addNumbersModalOpen = false;
 			rawNumbers = '';
 			newContactName = '';
@@ -136,7 +154,7 @@
 		}
 	}
 
-	// 2. Import CSV Handler
+	// 2. Import CSV / Excel Handler
 	function handleFileSelected(e: Event) {
 		const target = e.target as HTMLInputElement;
 		const file = target.files?.[0];
@@ -152,27 +170,16 @@
 		}
 		importing = true;
 		try {
-			const text = await importFile.text();
-			const tokens = text.split(/[\r\n,;\s]+/).map((s) => s.trim()).filter(Boolean);
-			const validNumbers: string[] = [];
-			for (const t of tokens) {
-				const cleaned = t.replace(/[^\d+]/g, '');
-				const m = cleaned.match(/^(?:\+?88)?0?(1[3-9]\d{8})$/);
-				if (m) {
-					validNumbers.push('+880' + m[1]);
-				}
+			const fd = new FormData();
+			fd.append('file', importFile);
+			const res = await api.upload<{ message: string; valid_count: number; invalid_count: number }>(
+				`/api/v1/customer/groups/${groupId}/contacts/import`,
+				fd
+			);
+			toast.success('Import Completed', res.message || `Imported ${res.valid_count} contact(s) into group.`);
+			if ((res.invalid_count ?? 0) > 0) {
+				toast.warning('Notice', `${res.invalid_count} row(s) without valid phone numbers were skipped.`);
 			}
-
-			if (validNumbers.length === 0) {
-				toast.error('No Numbers Found', 'Could not detect valid phone numbers in file.');
-				importing = false;
-				return;
-			}
-
-			await api.post(`/api/v1/customer/groups/${groupId}/contacts`, {
-				phone_numbers: validNumbers.join('\n')
-			});
-			toast.success('Import Successful', `Imported ${validNumbers.length} contacts into group.`);
 			importModalOpen = false;
 			importFile = null;
 			importFileName = '';
@@ -226,18 +233,125 @@
 	}
 
 	// 5. Export Contacts
-	function handleExportContacts() {
+	async function handleExportContacts() {
 		if (contacts.length === 0) {
 			toast.info('No Contacts', 'There are no contacts to export in this group.');
 			return;
 		}
-		const rows = contacts.map((c) => ({
-			Name: c.name || '',
-			Phone: c.phone,
-			'Added At': new Date(c.created_at).toLocaleString()
-		}));
-		exportToCsv(`${group?.name || 'group'}-contacts.csv`, rows);
-		toast.success('Export Complete', 'Downloaded group contacts CSV.');
+		exporting = true;
+		try {
+			const params = new URLSearchParams();
+			if (contactSearch.trim()) params.set('search', contactSearch.trim());
+			const qs = params.toString();
+			const blob = await api.download(`/api/v1/customer/groups/${groupId}/contacts/export${qs ? `?${qs}` : ''}`);
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `${group?.name || 'group'}-contacts.csv`;
+			a.click();
+			URL.revokeObjectURL(url);
+			toast.success('Export Complete', 'Downloaded group contacts CSV.');
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : 'Failed to export contacts.';
+			toast.error('Export Error', msg);
+		} finally {
+			exporting = false;
+		}
+	}
+
+	// 6. Attach Existing Contacts
+	async function loadAttachOptions() {
+		attachLoading = true;
+		try {
+			const params = new URLSearchParams({ exclude_group_id: String(groupId), per_page: '50' });
+			if (attachSearch.trim()) params.set('search', attachSearch.trim());
+			const res = await api.get<{ data: Contact[] }>(`/api/v1/customer/contacts?${params}`);
+			attachOptions = res.data || [];
+		} catch {
+			attachOptions = [];
+		} finally {
+			attachLoading = false;
+		}
+	}
+
+	function handleAttachSearchInput() {
+		if (attachSearchTimeout) clearTimeout(attachSearchTimeout);
+		attachSearchTimeout = setTimeout(() => loadAttachOptions(), 250);
+	}
+
+	function openAttachModal() {
+		attachSearch = '';
+		attachSelectedIds = [];
+		attachModalOpen = true;
+		loadAttachOptions();
+	}
+
+	function toggleAttachSelect(id: number) {
+		if (attachSelectedIds.includes(id)) {
+			attachSelectedIds = attachSelectedIds.filter((item) => item !== id);
+		} else {
+			attachSelectedIds = [...attachSelectedIds, id];
+		}
+	}
+
+	async function handleAttachExisting() {
+		if (attachSelectedIds.length === 0) {
+			toast.error('Selection Required', 'Select at least one contact to attach.');
+			return;
+		}
+		attaching = true;
+		try {
+			const res = await api.post<{ message: string }>(`/api/v1/customer/groups/${groupId}/contacts`, {
+				contact_ids: attachSelectedIds
+			});
+			toast.success('Contacts Attached', res.message || `Attached ${attachSelectedIds.length} contact(s).`);
+			attachModalOpen = false;
+			attachSelectedIds = [];
+			loadContacts();
+			loadGroup();
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : 'Failed to attach contacts.';
+			toast.error('Attach Error', msg);
+		} finally {
+			attaching = false;
+		}
+	}
+
+	// 7. Bulk Remove from Group
+	function toggleSelectAllContacts() {
+		if (filteredContacts.length > 0 && selectedContactIds.length === filteredContacts.length) {
+			selectedContactIds = [];
+		} else {
+			selectedContactIds = filteredContacts.map((c) => c.id);
+		}
+	}
+
+	function toggleSelectContact(id: number) {
+		if (selectedContactIds.includes(id)) {
+			selectedContactIds = selectedContactIds.filter((item) => item !== id);
+		} else {
+			selectedContactIds = [...selectedContactIds, id];
+		}
+	}
+
+	async function handleBulkDetach() {
+		if (selectedContactIds.length === 0) return;
+		bulkDetaching = true;
+		try {
+			const res = await api.post<{ message: string }>(`/api/v1/customer/groups/${groupId}/contacts/bulk-detach`, {
+				contact_ids: selectedContactIds
+			});
+			toast.success('Contacts Removed', res.message || 'Selected contacts removed from group.');
+			bulkDetachModalOpen = false;
+			selectedContactIds = [];
+			loadContacts();
+			loadGroup();
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : 'Failed to remove selected contacts.';
+			toast.error('Remove Error', msg);
+		} finally {
+			bulkDetaching = false;
+		}
 	}
 
 	let filteredContacts = $derived.by(() => {
@@ -289,12 +403,13 @@
 			</button>
 
 			<!-- View (blue) -->
-			<a
-				href="/audience/groups"
+			<button
+				type="button"
+				onclick={() => (viewGroupModalOpen = true)}
 				class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-2xs hover:bg-blue-700 cursor-pointer"
 			>
 				View
-			</a>
+			</button>
 
 			<!-- Delete (red) -->
 			<button
@@ -396,7 +511,7 @@
 				<!-- 4. Attach Existing -->
 				<button
 					type="button"
-					onclick={() => { rawNumbers = ''; addNumbersModalOpen = true; }}
+					onclick={openAttachModal}
 					class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-2xs hover:bg-gray-50 cursor-pointer"
 				>
 					<svg class="h-3.5 w-3.5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -409,18 +524,30 @@
 				<button
 					type="button"
 					onclick={handleExportContacts}
-					class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-2xs hover:bg-gray-50 cursor-pointer"
+					disabled={exporting}
+					class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-2xs hover:bg-gray-50 disabled:opacity-50 cursor-pointer"
 				>
 					<svg class="h-3.5 w-3.5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
 						<path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
 					</svg>
-					Export Contacts
+					{exporting ? 'Exporting...' : 'Export Contacts'}
 				</button>
 			</div>
 		</div>
 
-		<!-- Table Search -->
-		<div class="flex items-center justify-end p-3 border-b border-gray-100 bg-white">
+		<!-- Table Search & Bulk Actions -->
+		<div class="flex flex-wrap items-center justify-between gap-2 p-3 border-b border-gray-100 bg-white">
+			<div>
+				{#if selectedContactIds.length > 0}
+					<button
+						type="button"
+						onclick={() => (bulkDetachModalOpen = true)}
+						class="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 cursor-pointer"
+					>
+						Remove from Group ({selectedContactIds.length})
+					</button>
+				{/if}
+			</div>
 			<div class="relative w-64">
 				<div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-2.5">
 					<svg class="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -442,7 +569,12 @@
 				<thead>
 					<tr class="border-b border-gray-200 bg-gray-50/70 text-gray-600 font-semibold tracking-wider uppercase text-[11px]">
 						<th class="w-10 py-3 px-4">
-							<input type="checkbox" class="rounded border-gray-300 text-teal-600 focus:ring-teal-500" />
+							<input
+								type="checkbox"
+								checked={filteredContacts.length > 0 && selectedContactIds.length === filteredContacts.length}
+								onchange={toggleSelectAllContacts}
+								class="rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+							/>
 						</th>
 						<th class="py-3 px-4">NAME</th>
 						<th class="py-3 px-4">PHONE</th>
@@ -469,7 +601,12 @@
 						{#each filteredContacts as contact (contact.id)}
 							<tr class="hover:bg-gray-50/70 transition">
 								<td class="py-3 px-4">
-									<input type="checkbox" class="rounded border-gray-300 text-teal-600 focus:ring-teal-500" />
+									<input
+										type="checkbox"
+										checked={selectedContactIds.includes(contact.id)}
+										onchange={() => toggleSelectContact(contact.id)}
+										class="rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+									/>
 								</td>
 								<td class="py-3 px-4 font-medium text-gray-900 whitespace-nowrap">
 									{contact.name || '—'}
@@ -679,6 +816,160 @@
 					</button>
 				</div>
 			</form>
+		</div>
+	</div>
+{/if}
+
+<!-- Attach Existing Contacts Modal -->
+{#if attachModalOpen}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in backdrop-blur-xs">
+		<div class="relative w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl border border-gray-100">
+			<div class="flex items-center justify-between pb-3 border-b border-gray-100">
+				<h3 class="text-base font-bold text-gray-900">Attach Existing Contacts</h3>
+				<button
+					type="button"
+					onclick={() => (attachModalOpen = false)}
+					class="text-gray-400 hover:text-gray-600 cursor-pointer"
+				>
+					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+					</svg>
+				</button>
+			</div>
+
+			<div class="mt-4 space-y-3">
+				<input
+					type="text"
+					bind:value={attachSearch}
+					oninput={handleAttachSearchInput}
+					placeholder="Search contacts by name or phone..."
+					class="w-full rounded-lg border border-gray-300 bg-white py-2 px-3 text-xs text-gray-900 placeholder-gray-400 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
+				/>
+
+				<div class="max-h-64 overflow-y-auto rounded-lg border border-gray-200 divide-y divide-gray-100">
+					{#if attachLoading}
+						<div class="py-8 text-center text-xs text-gray-500">Searching contacts...</div>
+					{:else if attachOptions.length === 0}
+						<div class="py-8 text-center text-xs text-gray-500">
+							No unattached contacts found{attachSearch.trim() ? ' matching your search' : ''}.
+						</div>
+					{:else}
+						{#each attachOptions as opt (opt.id)}
+							<label class="flex items-center justify-between px-3 py-2.5 hover:bg-gray-50 cursor-pointer text-xs">
+								<div class="flex items-center gap-2.5">
+									<input
+										type="checkbox"
+										checked={attachSelectedIds.includes(opt.id)}
+										onchange={() => toggleAttachSelect(opt.id)}
+										class="rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+									/>
+									<div>
+										<p class="font-semibold text-gray-900">{opt.name || 'Unnamed Contact'}</p>
+										<p class="font-mono text-[11px] text-gray-500">{opt.phone}</p>
+									</div>
+								</div>
+							</label>
+						{/each}
+					{/if}
+				</div>
+			</div>
+
+			<div class="mt-6 flex items-center justify-between gap-3 pt-2">
+				<span class="text-xs text-gray-500">{attachSelectedIds.length} selected</span>
+				<div class="flex items-center gap-2">
+					<button
+						type="button"
+						onclick={() => (attachModalOpen = false)}
+						class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer"
+					>
+						Cancel
+					</button>
+					<button
+						type="button"
+						disabled={attaching || attachSelectedIds.length === 0}
+						onclick={handleAttachExisting}
+						class="rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition disabled:opacity-50 cursor-pointer"
+					>
+						{attaching ? 'Attaching...' : 'Attach Selected'}
+					</button>
+				</div>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- View Group Details Modal -->
+{#if viewGroupModalOpen && group}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in backdrop-blur-xs">
+		<div class="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-xl border border-gray-100">
+			<div class="flex items-center justify-between border-b border-gray-100 pb-3">
+				<h3 class="text-base font-bold text-gray-900">Group Details</h3>
+				<button
+					type="button"
+					onclick={() => (viewGroupModalOpen = false)}
+					class="text-gray-400 hover:text-gray-600 cursor-pointer"
+				>
+					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+					</svg>
+				</button>
+			</div>
+			<div class="mt-4 grid grid-cols-2 gap-4 text-xs">
+				<div>
+					<p class="text-[11px] font-medium uppercase tracking-wider text-gray-400">Group Name</p>
+					<p class="mt-1 font-bold text-gray-900">{group.name}</p>
+				</div>
+				<div>
+					<p class="text-[11px] font-medium uppercase tracking-wider text-gray-400">Contacts</p>
+					<p class="mt-1 font-semibold text-teal-700">{contacts.length}</p>
+				</div>
+				<div class="col-span-2">
+					<p class="text-[11px] font-medium uppercase tracking-wider text-gray-400">Description</p>
+					<p class="mt-1 text-gray-700">{group.description || '—'}</p>
+				</div>
+				<div class="col-span-2">
+					<p class="text-[11px] font-medium uppercase tracking-wider text-gray-400">Created At</p>
+					<p class="mt-1 text-gray-700">{new Date(group.created_at).toLocaleString()}</p>
+				</div>
+			</div>
+			<div class="mt-6 flex items-center justify-end border-t border-gray-100 pt-3">
+				<button
+					type="button"
+					onclick={() => (viewGroupModalOpen = false)}
+					class="rounded-lg border border-gray-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer"
+				>
+					Close
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Bulk Remove from Group Confirmation Modal -->
+{#if bulkDetachModalOpen}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in backdrop-blur-xs">
+		<div class="relative w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl border border-gray-100">
+			<h3 class="text-base font-bold text-gray-900">Remove Selected from Group</h3>
+			<p class="mt-2 text-xs text-gray-600">
+				Remove <span class="font-semibold text-gray-900">{selectedContactIds.length}</span> selected contact{selectedContactIds.length === 1 ? '' : 's'} from "{group?.name}"? Contacts remain in your directory.
+			</p>
+			<div class="mt-6 flex items-center justify-end gap-3">
+				<button
+					type="button"
+					onclick={() => (bulkDetachModalOpen = false)}
+					class="rounded-lg border border-gray-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer"
+				>
+					Cancel
+				</button>
+				<button
+					type="button"
+					disabled={bulkDetaching}
+					onclick={handleBulkDetach}
+					class="rounded-lg bg-red-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+				>
+					{bulkDetaching ? 'Removing...' : 'Remove'}
+				</button>
+			</div>
 		</div>
 	</div>
 {/if}

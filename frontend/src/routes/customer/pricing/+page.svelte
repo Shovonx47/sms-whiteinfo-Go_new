@@ -12,14 +12,16 @@
 	}
 
 	let rates = $state<OperatorRate[]>([]);
+	let tariffPlan = $state<string | null>(null);
 	let loading = $state(true);
 	let search = $state('');
 
 	async function load() {
 		loading = true;
 		try {
-			const res = await api.get<{ data: OperatorRate[] }>('/api/v1/customer/pricing');
+			const res = await api.get<{ data: OperatorRate[]; tariff_plan?: string | null }>('/api/v1/customer/pricing');
 			rates = res.data || [];
+			tariffPlan = res.tariff_plan ?? null;
 		} catch {
 			rates = [];
 		} finally {
@@ -57,7 +59,14 @@
 
 	<!-- Page Heading -->
 	<div class="flex items-center justify-between">
-		<h1 class="text-2xl font-bold tracking-tight text-gray-950">Pricing Reports</h1>
+		<div class="flex flex-wrap items-center gap-3">
+			<h1 class="text-2xl font-bold tracking-tight text-gray-950">Pricing Reports</h1>
+			{#if tariffPlan}
+				<span class="inline-flex items-center rounded-md bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-700 ring-1 ring-inset ring-teal-600/20">
+					Tariff Plan: {tariffPlan}
+				</span>
+			{/if}
+		</div>
 	</div>
 
 	<!-- Main Card -->

@@ -1,15 +1,14 @@
 package httpapi
 
 import (
-	stdctx "context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,12 +17,6 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"golang.org/x/crypto/bcrypt"
-
-	"smswhiteinfo/customer-api/internal/batch"
-	"smswhiteinfo/customer-api/internal/crypto"
-	"smswhiteinfo/customer-api/internal/sms"
-	"smswhiteinfo/customer-api/internal/sms/drivers"
 )
 
 func formatTimeAgo(t time.Time) string {
@@ -62,10 +55,12 @@ func (server *Server) senders(context fiber.Ctx) error {
 	offset := (page - 1) * perPage
 
 	conditions := []string{
-		"(su.user_id = ? OR s.requested_by = ?)",
+		"su.user_id = ?",
+		"s.is_enabled = 1",
+		"COALESCE(s.approval_status, 'approved') = 'approved'",
 		"s.deleted_at IS NULL",
 	}
-	args := []any{claims.UserID, claims.UserID}
+	args := []any{claims.UserID}
 
 	if search := context.Query("search"); search != "" {
 		conditions = append(conditions, "s.sender_id LIKE ?")
@@ -124,69 +119,8 @@ func (server *Server) senders(context fiber.Ctx) error {
 }
 
 func (server *Server) createSender(context fiber.Ctx) error {
-	claims := customer(context)
-
-	var req struct {
-		SenderID string `json:"sender_id"`
-		Type     string `json:"type"`
-	}
-	if err := json.Unmarshal(context.Body(), &req); err != nil {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Invalid request."})
-	}
-
-	senderLabel := strings.ToUpper(strings.TrimSpace(req.SenderID))
-	if senderLabel == "" {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"errors": fiber.Map{"sender_id": []string{"Sender ID is required."}},
-		})
-	}
-	if req.Type != "masking" && req.Type != "non_masking" {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"errors": fiber.Map{"type": []string{"Type must be masking or non_masking."}},
-		})
-	}
-
-	// Check existing
-	var existingID int64
-	_ = server.db.QueryRow(`
-		SELECT s.id FROM senders s
-		LEFT JOIN sender_user su ON su.sender_id = s.id
-		WHERE s.sender_id = ? AND (su.user_id = ? OR s.requested_by = ?) AND s.deleted_at IS NULL
-		LIMIT 1
-	`, senderLabel, claims.UserID, claims.UserID).Scan(&existingID)
-	if existingID > 0 {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"message": "You have already registered or requested this Sender ID.",
-		})
-	}
-
-	now := time.Now()
-	result, err := server.db.Exec(`
-		INSERT INTO senders (sender_id, type, approval_status, requested_by, is_enabled, created_at, updated_at)
-		VALUES (?, ?, 'pending', ?, 0, ?, ?)
-	`, senderLabel, req.Type, claims.UserID, now, now)
-	if err != nil {
-		return databaseError(context, err)
-	}
-
-	senderID, _ := result.LastInsertId()
-
-	_, _ = server.db.Exec(
-		"INSERT IGNORE INTO sender_user (sender_id, user_id) VALUES (?, ?)",
-		senderID, claims.UserID,
-	)
-
-	return context.Status(http.StatusCreated).JSON(fiber.Map{
-		"message": "Sender ID submitted for approval.",
-		"data": fiber.Map{
-			"id":              senderID,
-			"sender_id":       senderLabel,
-			"type":            req.Type,
-			"approval_status": "pending",
-			"status":          "pending",
-			"is_enabled":      false,
-			"created_at":      now.Format(time.RFC3339),
-		},
+	return context.Status(http.StatusForbidden).JSON(fiber.Map{
+		"message": "Customers cannot request or create Sender IDs. Contact your administrator or reseller.",
 	})
 }
 
@@ -202,14 +136,18 @@ func (server *Server) contacts(context fiber.Ctx) error {
 	conditions := []string{"c.user_id = ?", "c.deleted_at IS NULL"}
 	args := []any{claims.UserID}
 
-	if search := context.Query("search"); search != "" {
-		conditions = append(conditions, "(c.phone LIKE ? OR c.name LIKE ?)")
+	if search := strings.TrimSpace(context.Query("search")); search != "" {
+		conditions = append(conditions, "(c.phone LIKE ? OR COALESCE(c.name, '') LIKE ?)")
 		like := "%" + search + "%"
 		args = append(args, like, like)
 	}
-	if groupID := context.Query("group_id"); groupID != "" {
+	if groupID := strings.TrimSpace(context.Query("group_id")); groupID != "" {
 		conditions = append(conditions, "EXISTS(SELECT 1 FROM contact_group cg WHERE cg.contact_id = c.id AND cg.group_id = ?)")
 		args = append(args, groupID)
+	}
+	if excludeGroupID := strings.TrimSpace(context.Query("exclude_group_id")); excludeGroupID != "" {
+		conditions = append(conditions, "NOT EXISTS(SELECT 1 FROM contact_group cg WHERE cg.contact_id = c.id AND cg.group_id = ?)")
+		args = append(args, excludeGroupID)
 	}
 
 	where := "WHERE " + strings.Join(conditions, " AND ")
@@ -221,10 +159,10 @@ func (server *Server) contacts(context fiber.Ctx) error {
 
 	args = append(args, perPage, offset)
 	rows, err := server.db.Query(`
-		SELECT c.id, c.name, c.phone,
-		       (SELECT g.name FROM groups g JOIN contact_group cg ON cg.group_id = g.id WHERE cg.contact_id = c.id LIMIT 1) as group_name,
-		       (SELECT g.id FROM groups g JOIN contact_group cg ON cg.group_id = g.id WHERE cg.contact_id = c.id LIMIT 1) as group_id,
-		       c.created_at
+		SELECT c.id, COALESCE(c.name, ''), c.phone,
+		       (SELECT g.name FROM `+"`groups`"+` g JOIN contact_group cg ON cg.group_id = g.id WHERE cg.contact_id = c.id LIMIT 1) as group_name,
+		       (SELECT g.id FROM `+"`groups`"+` g JOIN contact_group cg ON cg.group_id = g.id WHERE cg.contact_id = c.id LIMIT 1) as group_id,
+		       c.created_at, c.updated_at
 		FROM contacts c
 		`+where+`
 		ORDER BY c.id DESC
@@ -241,10 +179,18 @@ func (server *Server) contacts(context fiber.Ctx) error {
 		var name, phone string
 		var groupName *string
 		var groupID *int64
-		var createdAt time.Time
+		var createdAt, updatedAt sql.NullTime
 
-		if err := rows.Scan(&id, &name, &phone, &groupName, &groupID, &createdAt); err != nil {
+		if err := rows.Scan(&id, &name, &phone, &groupName, &groupID, &createdAt, &updatedAt); err != nil {
 			continue
+		}
+		createdStr := ""
+		if createdAt.Valid {
+			createdStr = createdAt.Time.Format(time.RFC3339)
+		}
+		updatedStr := createdStr
+		if updatedAt.Valid {
+			updatedStr = updatedAt.Time.Format(time.RFC3339)
 		}
 		items = append(items, fiber.Map{
 			"id":         id,
@@ -252,7 +198,8 @@ func (server *Server) contacts(context fiber.Ctx) error {
 			"phone":      phone,
 			"group":      groupName,
 			"group_id":   groupID,
-			"created_at": createdAt.Format(time.RFC3339),
+			"created_at": createdStr,
+			"updated_at": updatedStr,
 		})
 	}
 
@@ -274,29 +221,45 @@ func (server *Server) createContact(context fiber.Ctx) error {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Invalid request."})
 	}
 
+	req.Name = strings.TrimSpace(req.Name)
 	req.Phone = strings.TrimSpace(req.Phone)
 	if req.Phone == "" {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"errors": fiber.Map{"phone": []string{"Phone number is required."}},
+			"message": "Phone number is required.",
+			"errors":  fiber.Map{"phone": []string{"Phone number is required."}},
+		})
+	}
+
+	normalizedPhone, ok := normalizeBDContactPhone(req.Phone)
+	if !ok {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+			"message": "Please enter a valid Bangladeshi mobile number (e.g. 017XXXXXXXX or +8801XXXXXXXX).",
+			"errors":  fiber.Map{"phone": []string{"Please enter a valid Bangladeshi mobile number (e.g. 017XXXXXXXX or +8801XXXXXXXX)."}},
+		})
+	}
+
+	var existingID int64
+	if err := server.db.QueryRow(
+		"SELECT id FROM contacts WHERE user_id = ? AND phone = ? AND deleted_at IS NULL LIMIT 1",
+		claims.UserID, normalizedPhone,
+	).Scan(&existingID); err == nil && existingID > 0 {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+			"message": "A contact with this phone number already exists.",
+			"errors":  fiber.Map{"phone": []string{"The phone has already been taken."}},
 		})
 	}
 
 	now := time.Now()
-	result, err := server.db.Exec(
-		"INSERT INTO contacts (user_id, name, phone, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		claims.UserID, strings.TrimSpace(req.Name), req.Phone, now, now,
-	)
+	contactID, err := upsertUserContact(server.db, claims.UserID, normalizedPhone, req.Name, now)
 	if err != nil {
 		return databaseError(context, err)
 	}
-
-	contactID, _ := result.LastInsertId()
 
 	var groupName *string
 	if req.GroupID != nil {
 		var gName string
 		err := server.db.QueryRow(
-			"SELECT name FROM groups WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+			"SELECT name FROM `groups` WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
 			*req.GroupID, claims.UserID,
 		).Scan(&gName)
 		if err == nil {
@@ -312,10 +275,11 @@ func (server *Server) createContact(context fiber.Ctx) error {
 		"message": "Contact added successfully.",
 		"data": fiber.Map{
 			"id":         contactID,
-			"name":       strings.TrimSpace(req.Name),
-			"phone":      req.Phone,
+			"name":       req.Name,
+			"phone":      normalizedPhone,
 			"group":      groupName,
 			"created_at": now.Format(time.RFC3339),
+			"updated_at": now.Format(time.RFC3339),
 		},
 	})
 }
@@ -324,10 +288,11 @@ func (server *Server) deleteContact(context fiber.Ctx) error {
 	claims := customer(context)
 	id := context.Params("id")
 
-	result, err := server.db.Exec(
-		"DELETE FROM contacts WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+	_, _ = server.db.Exec(
+		"DELETE cg FROM contact_group cg INNER JOIN contacts c ON c.id = cg.contact_id WHERE cg.contact_id = ? AND c.user_id = ?",
 		id, claims.UserID,
 	)
+	result, err := server.db.Exec("DELETE FROM contacts WHERE id = ? AND user_id = ?", id, claims.UserID)
 	if err != nil {
 		return databaseError(context, err)
 	}
@@ -338,6 +303,78 @@ func (server *Server) deleteContact(context fiber.Ctx) error {
 	}
 
 	return context.JSON(fiber.Map{"message": "Contact deleted successfully."})
+}
+
+func (server *Server) updateContact(context fiber.Ctx) error {
+	claims := customer(context)
+	id := context.Params("id")
+
+	var req struct {
+		Name  string `json:"name"`
+		Phone string `json:"phone"`
+	}
+	if err := json.Unmarshal(context.Body(), &req); err != nil {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Invalid request."})
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	req.Phone = strings.TrimSpace(req.Phone)
+	if req.Phone == "" {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+			"message": "Phone number is required.",
+			"errors":  fiber.Map{"phone": []string{"Phone number is required."}},
+		})
+	}
+
+	normalizedPhone, ok := normalizeBDContactPhone(req.Phone)
+	if !ok {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+			"message": "Please enter a valid Bangladeshi mobile number (e.g. 017XXXXXXXX or +8801XXXXXXXX).",
+			"errors":  fiber.Map{"phone": []string{"Please enter a valid Bangladeshi mobile number (e.g. 017XXXXXXXX or +8801XXXXXXXX)."}},
+		})
+	}
+
+	var existingOwner int64
+	if err := server.db.QueryRow(
+		"SELECT id FROM contacts WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+		id, claims.UserID,
+	).Scan(&existingOwner); err != nil {
+		return context.Status(http.StatusNotFound).JSON(fiber.Map{"message": "Contact not found."})
+	}
+
+	var duplicateID int64
+	if err := server.db.QueryRow(
+		"SELECT id FROM contacts WHERE user_id = ? AND phone = ? AND id != ? LIMIT 1",
+		claims.UserID, normalizedPhone, id,
+	).Scan(&duplicateID); err == nil && duplicateID > 0 {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+			"message": "A contact with this phone number already exists.",
+			"errors":  fiber.Map{"phone": []string{"The phone has already been taken."}},
+		})
+	}
+
+	var nullableName any
+	if req.Name != "" {
+		nullableName = req.Name
+	}
+	now := time.Now()
+	_, err := server.db.Exec(`
+		UPDATE contacts SET name = ?, phone = ?, updated_at = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, nullableName, normalizedPhone, now, id, claims.UserID)
+	if err != nil {
+		return databaseError(context, err)
+	}
+
+	return context.JSON(fiber.Map{
+		"message": "Contact updated successfully.",
+		"data": fiber.Map{
+			"id":         id,
+			"name":       req.Name,
+			"phone":      normalizedPhone,
+			"updated_at": now.Format(time.RFC3339),
+		},
+	})
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -406,26 +443,64 @@ func (server *Server) groups(context fiber.Ctx) error {
 func (server *Server) createGroup(context fiber.Ctx) error {
 	claims := customer(context)
 
-	var req struct {
-		Name         string `json:"name"`
-		Description  string `json:"description"`
-		PhoneNumbers string `json:"_phone_numbers"`
-	}
-	if err := json.Unmarshal(context.Body(), &req); err != nil {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Invalid request."})
+	var name, description, phoneNumbers string
+	var tmpUploadPath string
+
+	contentType := strings.ToLower(context.Get("Content-Type"))
+	if strings.Contains(contentType, "multipart/form-data") {
+		name = strings.TrimSpace(context.FormValue("name"))
+		description = strings.TrimSpace(context.FormValue("description"))
+		phoneNumbers = context.FormValue("_phone_numbers")
+		if strings.TrimSpace(phoneNumbers) == "" {
+			phoneNumbers = context.FormValue("phone_numbers")
+		}
+
+		fileHeader, _ := context.FormFile("file")
+		if fileHeader == nil {
+			fileHeader, _ = context.FormFile("_import_file")
+		}
+		if fileHeader != nil {
+			ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
+			if ext != ".csv" && ext != ".txt" && ext != ".xlsx" {
+				return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+					"message": "Unsupported file format. Please upload a .csv, .txt, or .xlsx file.",
+				})
+			}
+			tmpDir := filepath.Join(server.storageRoot(), "tmp", "group-imports")
+			if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+				return databaseError(context, err)
+			}
+			tmpUploadPath = filepath.Join(tmpDir, fmt.Sprintf("%d-%s%s", claims.UserID, uuid.NewString(), ext))
+			if err := context.SaveFile(fileHeader, tmpUploadPath); err != nil {
+				return context.Status(http.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to save uploaded file."})
+			}
+			defer os.Remove(tmpUploadPath)
+		}
+	} else {
+		var req struct {
+			Name         string `json:"name"`
+			Description  string `json:"description"`
+			PhoneNumbers string `json:"_phone_numbers"`
+		}
+		if err := json.Unmarshal(context.Body(), &req); err != nil {
+			return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Invalid request."})
+		}
+		name = strings.TrimSpace(req.Name)
+		description = strings.TrimSpace(req.Description)
+		phoneNumbers = req.PhoneNumbers
 	}
 
-	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" {
+	if name == "" {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"errors": fiber.Map{"name": []string{"Group name is required."}},
+			"message": "Group name is required.",
+			"errors":  fiber.Map{"name": []string{"Group name is required."}},
 		})
 	}
 
 	now := time.Now()
 	result, err := server.db.Exec(
-		"INSERT INTO groups (user_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		claims.UserID, req.Name, strings.TrimSpace(req.Description), now, now,
+		"INSERT INTO `groups` (user_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+		claims.UserID, name, description, now, now,
 	)
 	if err != nil {
 		return databaseError(context, err)
@@ -433,28 +508,22 @@ func (server *Server) createGroup(context fiber.Ctx) error {
 
 	groupID, _ := result.LastInsertId()
 
-	// If phone numbers provided during creation, add them
-	if rawPhones := strings.TrimSpace(req.PhoneNumbers); rawPhones != "" {
-		tokens := strings.FieldsFunc(rawPhones, func(r rune) bool {
-			return r == '\n' || r == '\r' || r == ',' || r == ';' || r == ' '
-		})
-		for _, token := range tokens {
-			token = strings.TrimSpace(token)
-			if token == "" {
-				continue
-			}
-			// Find or create contact
-			var cid int64
-			err := server.db.QueryRow("SELECT id FROM contacts WHERE user_id = ? AND phone = ? LIMIT 1", claims.UserID, token).Scan(&cid)
-			if err == sql.ErrNoRows {
-				res, err := server.db.Exec("INSERT INTO contacts (user_id, phone, created_at, updated_at) VALUES (?, ?, ?, ?)", claims.UserID, token, now, now)
-				if err == nil {
-					cid, _ = res.LastInsertId()
-				}
-			}
-			if cid > 0 {
-				_, _ = server.db.Exec("INSERT IGNORE INTO contact_group (contact_id, group_id) VALUES (?, ?)", cid, groupID)
-			}
+	validCount := 0
+	invalidCount := 0
+	if rawPhones := strings.TrimSpace(phoneNumbers); rawPhones != "" {
+		v, inv, _ := importRawNumbersToGroup(server, claims.UserID, groupID, rawPhones, "", now)
+		validCount += v
+		invalidCount += inv
+	}
+
+	var fileImportErr string
+	if tmpUploadPath != "" {
+		v, inv, _, fErr := importSpreadsheetFileToGroup(server, claims.UserID, groupID, tmpUploadPath, now)
+		if fErr != nil {
+			fileImportErr = fErr.Error()
+		} else {
+			validCount += v
+			invalidCount += inv
 		}
 	}
 
@@ -462,13 +531,17 @@ func (server *Server) createGroup(context fiber.Ctx) error {
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM contact_group WHERE group_id = ?", groupID).Scan(&count)
 
 	return context.Status(http.StatusCreated).JSON(fiber.Map{
-		"message": "Contact group created.",
+		"message":       "Contact group created.",
+		"valid_count":   validCount,
+		"invalid_count": invalidCount,
+		"import_error":  fileImportErr,
 		"data": fiber.Map{
 			"id":             groupID,
-			"name":           req.Name,
-			"description":    strings.TrimSpace(req.Description),
+			"name":           name,
+			"description":    description,
 			"contacts_count": count,
 			"created_at":     now.Format(time.RFC3339),
+			"updated_at":     now.Format(time.RFC3339),
 		},
 	})
 }
@@ -556,14 +629,74 @@ func (server *Server) updateGroup(context fiber.Ctx) error {
 	})
 }
 
+func (server *Server) groupContacts(context fiber.Ctx) error {
+	claims := customer(context)
+	groupID := context.Params("id")
+
+	var exists int
+	if err := server.db.QueryRow(
+		"SELECT COUNT(*) FROM `groups` WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+		groupID, claims.UserID,
+	).Scan(&exists); err != nil || exists == 0 {
+		return context.Status(http.StatusNotFound).JSON(fiber.Map{"message": "Group not found."})
+	}
+
+	conditions := []string{"cg.group_id = ?", "c.user_id = ?", "c.deleted_at IS NULL"}
+	args := []any{groupID, claims.UserID}
+	if search := strings.TrimSpace(context.Query("search")); search != "" {
+		conditions = append(conditions, "(c.phone LIKE ? OR COALESCE(c.name, '') LIKE ?)")
+		like := "%" + search + "%"
+		args = append(args, like, like)
+	}
+
+	rows, err := server.db.Query(`
+		SELECT c.id, COALESCE(c.name, ''), c.phone, c.created_at, c.updated_at
+		FROM contacts c
+		JOIN contact_group cg ON cg.contact_id = c.id
+		WHERE `+strings.Join(conditions, " AND ")+`
+		ORDER BY COALESCE(c.name, '') ASC, c.id DESC
+	`, args...)
+	if err != nil {
+		return databaseError(context, err)
+	}
+	defer rows.Close()
+
+	items := []fiber.Map{}
+	for rows.Next() {
+		var id int64
+		var name, phone string
+		var createdAt, updatedAt sql.NullTime
+		if rows.Scan(&id, &name, &phone, &createdAt, &updatedAt) != nil {
+			continue
+		}
+		createdStr := ""
+		if createdAt.Valid {
+			createdStr = createdAt.Time.Format(time.RFC3339)
+		}
+		updatedStr := createdStr
+		if updatedAt.Valid {
+			updatedStr = updatedAt.Time.Format(time.RFC3339)
+		}
+		items = append(items, fiber.Map{
+			"id":         id,
+			"name":       name,
+			"phone":      phone,
+			"created_at": createdStr,
+			"updated_at": updatedStr,
+		})
+	}
+
+	return context.JSON(fiber.Map{"data": items})
+}
+
 func (server *Server) attachGroupContacts(context fiber.Ctx) error {
 	claims := customer(context)
 	groupID := context.Params("id")
 
 	// Verify group belongs to user
-	var exists int
-	err := server.db.QueryRow("SELECT COUNT(*) FROM groups WHERE id = ? AND user_id = ? AND deleted_at IS NULL", groupID, claims.UserID).Scan(&exists)
-	if err != nil || exists == 0 {
+	var groupIDNum int64
+	err := server.db.QueryRow("SELECT id FROM `groups` WHERE id = ? AND user_id = ? AND deleted_at IS NULL", groupID, claims.UserID).Scan(&groupIDNum)
+	if err != nil || groupIDNum == 0 {
 		return context.Status(http.StatusNotFound).JSON(fiber.Map{"message": "Group not found."})
 	}
 
@@ -578,15 +711,17 @@ func (server *Server) attachGroupContacts(context fiber.Ctx) error {
 
 	now := time.Now()
 	addedCount := 0
+	validCount := 0
+	invalidCount := 0
 
 	// 1. Existing contacts attached by ID
 	for _, cid := range req.ContactIDs {
-		// verify contact belongs to user
 		var valid int
 		_ = server.db.QueryRow("SELECT COUNT(*) FROM contacts WHERE id = ? AND user_id = ? AND deleted_at IS NULL", cid, claims.UserID).Scan(&valid)
 		if valid > 0 {
-			res, err := server.db.Exec("INSERT IGNORE INTO contact_group (contact_id, group_id) VALUES (?, ?)", cid, groupID)
+			res, err := server.db.Exec("INSERT IGNORE INTO contact_group (contact_id, group_id) VALUES (?, ?)", cid, groupIDNum)
 			if err == nil {
+				validCount++
 				if aff, _ := res.RowsAffected(); aff > 0 {
 					addedCount++
 				}
@@ -594,39 +729,19 @@ func (server *Server) attachGroupContacts(context fiber.Ctx) error {
 		}
 	}
 
-	// 2. Raw phone numbers
+	// 2. Raw phone numbers (validated & normalized to +8801...)
 	if raw := strings.TrimSpace(req.PhoneNumbers); raw != "" {
-		tokens := strings.FieldsFunc(raw, func(r rune) bool {
-			return r == '\n' || r == '\r' || r == ',' || r == ';' || r == ' '
-		})
-		for _, token := range tokens {
-			token = strings.TrimSpace(token)
-			if token == "" {
-				continue
-			}
-			var cid int64
-			err := server.db.QueryRow("SELECT id FROM contacts WHERE user_id = ? AND phone = ? LIMIT 1", claims.UserID, token).Scan(&cid)
-			if err == sql.ErrNoRows {
-				res, err := server.db.Exec("INSERT INTO contacts (user_id, name, phone, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-					claims.UserID, strings.TrimSpace(req.ContactName), token, now, now)
-				if err == nil {
-					cid, _ = res.LastInsertId()
-				}
-			}
-			if cid > 0 {
-				res, err := server.db.Exec("INSERT IGNORE INTO contact_group (contact_id, group_id) VALUES (?, ?)", cid, groupID)
-				if err == nil {
-					if aff, _ := res.RowsAffected(); aff > 0 {
-						addedCount++
-					}
-				}
-			}
-		}
+		v, inv, att := importRawNumbersToGroup(server, claims.UserID, groupIDNum, raw, req.ContactName, now)
+		validCount += v
+		invalidCount += inv
+		addedCount += att
 	}
 
 	return context.JSON(fiber.Map{
-		"message": fmt.Sprintf("%d contact(s) attached to group.", addedCount),
-		"added":   addedCount,
+		"message":       fmt.Sprintf("%d contact(s) attached to group.", addedCount),
+		"added":         addedCount,
+		"valid_count":   validCount,
+		"invalid_count": invalidCount,
 	})
 }
 
@@ -693,6 +808,15 @@ func (server *Server) templates(context fiber.Ctx) error {
 		args = append(args, like, like)
 	}
 
+	approvalFilter := strings.TrimSpace(context.Query("approval"))
+	if approvalFilter == "" {
+		approvalFilter = strings.TrimSpace(context.Query("status"))
+	}
+	if approvalFilter == "pending" || approvalFilter == "approved" || approvalFilter == "rejected" {
+		conditions = append(conditions, "COALESCE(t.approval, 'approved') = ?")
+		args = append(args, approvalFilter)
+	}
+
 	where := "WHERE " + strings.Join(conditions, " AND ")
 	countArgs := make([]any, len(args))
 	copy(countArgs, args)
@@ -702,7 +826,8 @@ func (server *Server) templates(context fiber.Ctx) error {
 
 	args = append(args, perPage, offset)
 	rows, err := server.db.Query(`
-		SELECT t.id, t.name, t.body, t.variables, t.created_at
+		SELECT t.id, t.name, t.body, t.variables, COALESCE(t.approval, 'approved'),
+		       COALESCE(t.rejection_reason, ''), t.approved_at, t.created_at
 		FROM templates t
 		`+where+`
 		ORDER BY t.id DESC
@@ -716,11 +841,12 @@ func (server *Server) templates(context fiber.Ctx) error {
 	items := []fiber.Map{}
 	for rows.Next() {
 		var id int
-		var name, body string
+		var name, body, approval, rejectionReason string
 		var variablesJSON *string
+		var approvedAt *time.Time
 		var createdAt time.Time
 
-		if err := rows.Scan(&id, &name, &body, &variablesJSON, &createdAt); err != nil {
+		if err := rows.Scan(&id, &name, &body, &variablesJSON, &approval, &rejectionReason, &approvedAt, &createdAt); err != nil {
 			continue
 		}
 
@@ -730,12 +856,15 @@ func (server *Server) templates(context fiber.Ctx) error {
 		}
 
 		items = append(items, fiber.Map{
-			"id":         id,
-			"name":       name,
-			"body":       body,
-			"variables":  variables,
-			"status":     "approved",
-			"created_at": createdAt.Format(time.RFC3339),
+			"id":               id,
+			"name":             name,
+			"body":             body,
+			"variables":        variables,
+			"status":           approval,
+			"approval":         approval,
+			"rejection_reason": rejectionReason,
+			"approved_at":      apiTimePtr(approvedAt),
+			"created_at":       createdAt.Format(time.RFC3339),
 		})
 	}
 
@@ -767,9 +896,17 @@ func (server *Server) createTemplate(context fiber.Ctx) error {
 	variablesJSON, _ := json.Marshal(variables)
 
 	now := time.Now()
+	requiresApproval := server.customerRequiresApproval(claims.UserID)
+	approval := "approved"
+	var approvedAt any = now
+	if requiresApproval {
+		approval = "pending"
+		approvedAt = nil
+	}
+
 	result, err := server.db.Exec(
-		"INSERT INTO templates (user_id, name, body, variables, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-		claims.UserID, req.Name, req.Body, string(variablesJSON), now, now,
+		"INSERT INTO templates (user_id, name, body, variables, approval, approved_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		claims.UserID, req.Name, req.Body, string(variablesJSON), approval, approvedAt, now, now,
 	)
 	if err != nil {
 		return databaseError(context, err)
@@ -777,15 +914,118 @@ func (server *Server) createTemplate(context fiber.Ctx) error {
 
 	templateID, _ := result.LastInsertId()
 
+	message := "Template created successfully."
+	if requiresApproval {
+		message = "Template submitted for admin approval."
+		server.notifyAdmins("Bulk SMS Template Awaiting Approval",
+			"Customer template \""+req.Name+"\" is awaiting your approval.",
+			"warning", "/superman/templates")
+	}
+
 	return context.Status(http.StatusCreated).JSON(fiber.Map{
-		"message": "Template created successfully.",
+		"message": message,
 		"data": fiber.Map{
 			"id":         templateID,
 			"name":       req.Name,
 			"body":       req.Body,
 			"variables":  variables,
-			"status":     "approved",
+			"status":     approval,
+			"approval":   approval,
 			"created_at": now.Format(time.RFC3339),
+		},
+	})
+}
+
+func (server *Server) templateDetail(context fiber.Ctx) error {
+	claims := customer(context)
+	id := context.Params("id")
+
+	var name, body, approval, rejection string
+	var variablesJSON *string
+	var approvedAt *time.Time
+	var createdAt time.Time
+	err := server.db.QueryRow(`
+		SELECT name, body, variables, COALESCE(approval, 'approved'),
+		       COALESCE(rejection_reason, ''), approved_at, created_at
+		FROM templates WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, id, claims.UserID).Scan(&name, &body, &variablesJSON, &approval, &rejection, &approvedAt, &createdAt)
+	if err == sql.ErrNoRows {
+		return context.Status(http.StatusNotFound).JSON(fiber.Map{"message": "Template not found."})
+	}
+	if err != nil {
+		return databaseError(context, err)
+	}
+
+	variables := []string{}
+	if variablesJSON != nil {
+		_ = json.Unmarshal([]byte(*variablesJSON), &variables)
+	}
+
+	return context.JSON(fiber.Map{"data": fiber.Map{
+		"id":               id,
+		"name":             name,
+		"body":             body,
+		"variables":        variables,
+		"status":           approval,
+		"approval":         approval,
+		"rejection_reason": rejection,
+		"approved_at":      apiTimePtr(approvedAt),
+		"created_at":       createdAt.Format(time.RFC3339),
+	}})
+}
+
+func (server *Server) updateTemplate(context fiber.Ctx) error {
+	claims := customer(context)
+	id := context.Params("id")
+
+	var approval string
+	err := server.db.QueryRow(
+		"SELECT COALESCE(approval, 'approved') FROM templates WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+		id, claims.UserID,
+	).Scan(&approval)
+	if err == sql.ErrNoRows {
+		return context.Status(http.StatusNotFound).JSON(fiber.Map{"message": "Template not found."})
+	}
+	if err != nil {
+		return databaseError(context, err)
+	}
+	if approval == "approved" {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+			"message": "This template has been approved by the admin and cannot be edited.",
+		})
+	}
+
+	var req struct {
+		Name string `json:"name"`
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal(context.Body(), &req); err != nil {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Invalid request."})
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Body = strings.TrimSpace(req.Body)
+	if req.Name == "" || req.Body == "" {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Name and body are required."})
+	}
+
+	variables := extractVariables(req.Body)
+	variablesJSON, _ := json.Marshal(variables)
+
+	if _, err := server.db.Exec(`
+		UPDATE templates SET name = ?, body = ?, variables = ?, updated_at = NOW()
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, req.Name, req.Body, string(variablesJSON), id, claims.UserID); err != nil {
+		return databaseError(context, err)
+	}
+
+	return context.JSON(fiber.Map{
+		"message": "Template updated successfully.",
+		"data": fiber.Map{
+			"id":        id,
+			"name":      req.Name,
+			"body":      req.Body,
+			"variables": variables,
+			"status":    approval,
 		},
 	})
 }
@@ -810,8 +1050,35 @@ func (server *Server) deleteTemplate(context fiber.Ctx) error {
 	return context.JSON(fiber.Map{"message": "Template deleted successfully."})
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Transactions
+func (server *Server) bulkDeleteTemplates(context fiber.Ctx) error {
+	claims := customer(context)
+	var req struct {
+		Ids []int64 `json:"ids"`
+	}
+	if err := json.Unmarshal(context.Body(), &req); err != nil || len(req.Ids) == 0 {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Please select at least one template."})
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(req.Ids)), ",")
+	args := make([]any, 0, len(req.Ids)+1)
+	args = append(args, claims.UserID)
+	for _, id := range req.Ids {
+		args = append(args, id)
+	}
+
+	res, err := server.db.Exec(
+		fmt.Sprintf("DELETE FROM templates WHERE user_id = ? AND id IN (%s)", placeholders),
+		args...,
+	)
+	if err != nil {
+		return databaseError(context, err)
+	}
+	affected, _ := res.RowsAffected()
+	return context.JSON(fiber.Map{
+		"message": fmt.Sprintf("%d template(s) deleted.", affected),
+		"deleted": affected,
+	})
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (server *Server) transactions(context fiber.Ctx) error {
@@ -958,48 +1225,7 @@ func (server *Server) deposits(context fiber.Ctx) error {
 }
 
 func (server *Server) createDeposit(context fiber.Ctx) error {
-	claims := customer(context)
-
-	var req struct {
-		Amount  float64 `json:"amount"`
-		Gateway string  `json:"gateway"`
-	}
-	if err := json.Unmarshal(context.Body(), &req); err != nil {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Invalid request."})
-	}
-
-	if req.Amount < 50 {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Minimum recharge amount is ৳50."})
-	}
-
-	now := time.Now()
-	method := "piprapay"
-	if req.Gateway != "" {
-		method = req.Gateway
-	}
-
-	res, err := server.db.Exec(`
-		INSERT INTO deposits (user_id, amount, currency, payment_method, status, created_at, updated_at)
-		VALUES (?, ?, 'BDT', ?, 'pending', ?, ?)
-	`, claims.UserID, req.Amount, method, now, now)
-	if err != nil {
-		return databaseError(context, err)
-	}
-
-	depID, _ := res.LastInsertId()
-	txID := fmt.Sprintf("DEP-%d", depID)
-	_, _ = server.db.Exec("UPDATE deposits SET transaction_id = ? WHERE id = ?", txID, depID)
-
-	return context.Status(http.StatusCreated).JSON(fiber.Map{
-		"success": true,
-		"message": "Deposit initiated successfully.",
-		"data": fiber.Map{
-			"id":             depID,
-			"transaction_id": txID,
-			"amount":         fmt.Sprintf("%.2f", req.Amount),
-			"status":         "pending",
-		},
-	})
+	return server.initiateDeposit(context)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1014,22 +1240,57 @@ func (server *Server) kycShow(context fiber.Ctx) error {
 		return databaseError(context, err)
 	}
 
-	isResubmission := u.KycStatus == "resubmit_required"
-	title := "KYC Verification Required"
+	hasNidOnRecord := u.FrontNID != nil && *u.FrontNID != "" && u.NidNumber != nil && *u.NidNumber != ""
+	isResubmission := u.CreatedBySP && u.KycStatus == "resubmit_required"
+	isLocked := hasNidOnRecord && !isResubmission
+
+	requestedFields := []string{}
+	if isResubmission && u.KycResubmitFields != nil && *u.KycResubmitFields != "" {
+		_ = json.Unmarshal([]byte(*u.KycResubmitFields), &requestedFields)
+	}
+
+	title := "KYC Documents Required"
 	heading := "Your account requires KYC verification"
-	if isResubmission {
-		title = "KYC Resubmission Required"
-		heading = "Please update and resubmit your KYC documents"
+	subheading := "We require KYC verification to ensure the security of our platform. Please submit the necessary documents to complete your account verification."
+
+	switch {
+	case u.KycStatus == "verified":
+		title = "KYC Documents — Verified"
+		heading = "Identity Verified & Locked"
+		subheading = "Your National ID documents and information have been verified and approved. These records are permanently locked and cannot be edited."
+	case u.KycStatus == "awaiting_sp_verification":
+		title = "KYC Documents — Awaiting Reseller Review"
+		heading = "Awaiting Reseller Verification"
+		subheading = "Your KYC documents are being reviewed by your reseller. You will be notified once the reseller has verified and forwarded them to the administrator."
+	case u.KycStatus == "under_review":
+		title = "KYC Documents — Under Review"
+		heading = "Documents Under Review"
+		subheading = "Your KYC submission is currently being reviewed by compliance. Documents cannot be modified while under review."
+	case isResubmission:
+		title = "KYC Documents — Resubmission Required"
+		heading = "Resubmission Required — Please Update Your Documents"
+		if u.KycRejectedReason != nil && *u.KycRejectedReason != "" {
+			subheading = *u.KycRejectedReason + " Please update the highlighted fields below and resubmit."
+		} else {
+			subheading = "Corrections have been requested for your KYC submission. Please resubmit the required documents."
+		}
+	case hasNidOnRecord:
+		title = "KYC Documents — Submitted & Locked"
+		heading = "KYC Submitted — Locked"
+		subheading = "Your KYC documents have been submitted and are permanently locked. You cannot edit, change, or delete your submitted KYC information."
 	}
 
 	return context.JSON(fiber.Map{
 		"data": fiber.Map{
-			"user":             u,
-			"is_resubmission": isResubmission,
-			"requested_fields": nil,
-			"title":            title,
-			"heading":          heading,
-			"subheading":       "We require KYC verification to ensure the security of our platform. Please submit the necessary documents to complete your account verification.",
+			"user":              u,
+			"is_resubmission":   isResubmission,
+			"is_locked":         isLocked,
+			"can_submit":        !isLocked,
+			"has_nid_on_record": hasNidOnRecord,
+			"requested_fields":  requestedFields,
+			"title":             title,
+			"heading":           heading,
+			"subheading":        subheading,
 		},
 	})
 }
@@ -1037,103 +1298,156 @@ func (server *Server) kycShow(context fiber.Ctx) error {
 func (server *Server) kycSubmit(context fiber.Ctx) error {
 	claims := customer(context)
 
-	storageRoot := server.kycService.StorageRoot()
+	u, err := server.loadUser(claims.UserID)
+	if err != nil {
+		return databaseError(context, err)
+	}
+
+	hasNidOnRecord := u.FrontNID != nil && *u.FrontNID != "" && u.NidNumber != nil && *u.NidNumber != ""
+	isResubmission := u.CreatedBySP && u.KycStatus == "resubmit_required"
+
+	if hasNidOnRecord && !isResubmission {
+		return context.Status(http.StatusForbidden).JSON(fiber.Map{
+			"message": "You have already submitted your KYC. Customers cannot edit, change, or delete submitted KYC documents.",
+		})
+	}
+	if u.CreatedBySP && u.KycStatus == "awaiting_sp_verification" {
+		return context.Status(http.StatusForbidden).JSON(fiber.Map{
+			"message": "Your KYC is currently being reviewed by your reseller. You cannot resubmit while it is under review.",
+		})
+	}
 
 	nidNumber := strings.TrimSpace(context.FormValue("nid_number"))
 	tradeLicenseNumber := strings.TrimSpace(context.FormValue("trade_license_number"))
 
-	var frontNidPath, backNidPath, livePhotoPath, tradeLicensePath *string
+	frontHeader, _ := context.FormFile("front_nid")
+	backHeader, _ := context.FormFile("back_nid")
+	tradeHeader, _ := context.FormFile("trade_license_file")
+	liveHeader, _ := context.FormFile("live_photo")
+	liveData := context.FormValue("live_photo")
 
-	// Helper to save uploaded file
-	saveFile := func(formField, subDir string) (*string, error) {
-		fileHeader, err := context.FormFile(formField)
-		if err != nil || fileHeader == nil {
+	if !isResubmission {
+		errors := fiber.Map{}
+		if nidNumber == "" {
+			errors["nid_number"] = []string{"The NID number is required."}
+		}
+		if frontHeader == nil {
+			errors["front_nid"] = []string{"The front side of your NID is required."}
+		}
+		if backHeader == nil {
+			errors["back_nid"] = []string{"The back side of your NID is required."}
+		}
+		if liveHeader == nil && liveData == "" {
+			errors["live_photo"] = []string{"Please capture a live photo using your webcam or phone camera before submitting."}
+		}
+		if len(errors) > 0 {
+			return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+				"message": "Please complete the required KYC fields.",
+				"errors":  errors,
+			})
+		}
+	}
+
+	var frontNidPath, backNidPath, livePhotoPath, tradeLicensePath *string
+	stored := []string{}
+
+	saveFile := func(header *multipart.FileHeader, dir string, maxBytes int64) (*string, error) {
+		if header == nil {
 			return nil, nil
 		}
-		ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
-		if ext == "" {
-			ext = ".jpg"
-		}
-		targetDir := filepath.Join(storageRoot, subDir)
-		if err := os.MkdirAll(targetDir, 0755); err != nil {
+		path, err := server.saveUploadedFile(header, dir, maxBytes, false)
+		if err != nil {
 			return nil, err
 		}
-		filename := fmt.Sprintf("%s%s", uuid.New().String(), ext)
-		destPath := filepath.Join(targetDir, filename)
-		if err := context.SaveFile(fileHeader, destPath); err != nil {
-			return nil, err
-		}
-		relPath := fmt.Sprintf("%s/%s", subDir, filename)
-		return &relPath, nil
+		stored = append(stored, path)
+
+		return &path, nil
 	}
 
-	var err error
-	frontNidPath, err = saveFile("front_nid", "ids")
-	if err != nil {
-		return context.Status(http.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to save front NID file."})
+	if frontNidPath, err = saveFile(frontHeader, "ids", maxNIDImageBytes); err != nil {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Front NID: " + err.Error()})
 	}
-	backNidPath, err = saveFile("back_nid", "ids")
-	if err != nil {
-		return context.Status(http.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to save back NID file."})
+	if backNidPath, err = saveFile(backHeader, "ids", maxNIDImageBytes); err != nil {
+		server.removeStoredFiles(stored...)
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Back NID: " + err.Error()})
 	}
-	tradeLicensePath, err = saveFile("trade_license_file", "trade_licenses")
-	if err != nil {
-		return context.Status(http.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to save trade license file."})
+	if tradeLicensePath, err = saveFile(tradeHeader, "trade_licenses", maxTradeLicenseBytes); err != nil {
+		server.removeStoredFiles(stored...)
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Trade license: " + err.Error()})
 	}
 
-	// Handle live_photo (can be multipart file or base64 data string)
-	livePhotoHeader, _ := context.FormFile("live_photo")
-	if livePhotoHeader != nil {
-		targetDir := filepath.Join(storageRoot, "live_photos")
-		_ = os.MkdirAll(targetDir, 0755)
-		filename := fmt.Sprintf("live_%s.jpg", uuid.New().String())
-		destPath := filepath.Join(targetDir, filename)
-		if err := context.SaveFile(livePhotoHeader, destPath); err == nil {
-			p := fmt.Sprintf("live_photos/%s", filename)
-			livePhotoPath = &p
+	if liveData != "" && liveHeader == nil {
+		path, liveErr := server.saveLivePhoto(liveData)
+		if liveErr != nil {
+			server.removeStoredFiles(stored...)
+			return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": liveErr.Error()})
 		}
-	} else if liveData := context.FormValue("live_photo"); strings.HasPrefix(liveData, "data:image") {
-		b64 := liveData
-		if commaIdx := strings.Index(b64, ","); commaIdx != -1 {
-			b64 = b64[commaIdx+1:]
+		livePhotoPath = &path
+		stored = append(stored, path)
+	} else if liveHeader != nil {
+		if livePhotoPath, err = saveFile(liveHeader, "live_photos", maxLivePhotoBytes); err != nil {
+			server.removeStoredFiles(stored...)
+			return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Live photo: " + err.Error()})
 		}
-		decoded, err := base64.StdEncoding.DecodeString(b64)
-		if err == nil && len(decoded) > 0 {
-			targetDir := filepath.Join(storageRoot, "live_photos")
-			_ = os.MkdirAll(targetDir, 0755)
-			filename := fmt.Sprintf("live_%s.jpg", uuid.New().String())
-			destPath := filepath.Join(targetDir, filename)
-			if err := os.WriteFile(destPath, decoded, 0644); err == nil {
-				p := fmt.Sprintf("live_photos/%s", filename)
-				livePhotoPath = &p
-			}
-		}
+	}
+
+	targetStatus := "under_review"
+	if u.CreatedBySP {
+		targetStatus = "awaiting_sp_verification"
+	}
+
+	var tradeSubmitted any
+	if tradeLicensePath != nil {
+		tradeSubmitted = 1
+	}
+	var nidParam any
+	if nidNumber != "" {
+		nidParam = nidNumber
 	}
 
 	_, err = server.db.Exec(`
 		UPDATE users
-		SET nid_number = COALESCE(NULLIF(?, ''), nid_number),
+		SET nid_number = COALESCE(?, nid_number),
 		    trade_license_number = COALESCE(NULLIF(?, ''), trade_license_number),
 		    front_nid = COALESCE(?, front_nid),
 		    back_nid = COALESCE(?, back_nid),
 		    live_photo = COALESCE(?, live_photo),
 		    trade_license_file = COALESCE(?, trade_license_file),
-		    kyc_status = 'under_review',
+		    trade_license_submitted = COALESCE(?, trade_license_submitted),
+		    kyc_status = ?,
 		    kyc_submitted_at = NOW(),
 		    kyc_rejected_reason = NULL,
 		    kyc_resubmit_fields = NULL,
+		    kyc_sp_verified_by = NULL,
+		    kyc_sp_verified_at = NULL,
 		    updated_at = NOW()
 		WHERE id = ?
-	`, nidNumber, tradeLicenseNumber, frontNidPath, backNidPath, livePhotoPath, tradeLicensePath, claims.UserID)
+	`, nidParam, tradeLicenseNumber, frontNidPath, backNidPath, livePhotoPath, tradeLicensePath, tradeSubmitted, targetStatus, claims.UserID)
 	if err != nil {
+		server.removeStoredFiles(stored...)
 		return databaseError(context, err)
 	}
 
-	u, _ := server.loadUser(claims.UserID)
+	updated, _ := server.loadUser(claims.UserID)
+
+	if u.CreatedBySP && u.SpID != nil {
+		server.createNotification(*u.SpID, "KYC Awaiting Your Verification",
+			"Customer "+u.Name+" submitted KYC documents for your verification.",
+			"warning", "heroicon-o-identification", "/sp/kyc")
+	} else {
+		server.notifyAdmins("New KYC Submission",
+			"Customer "+u.Name+" submitted KYC documents for review.",
+			"warning", "/superman/kyc/requests")
+	}
+
+	message := "KYC submitted successfully. Our team will review your documents and notify you shortly."
+	if u.CreatedBySP {
+		message = "KYC submitted successfully. Your documents have been submitted to your reseller for verification. You will be notified once they are reviewed."
+	}
 
 	return context.JSON(fiber.Map{
-		"message": "KYC submitted successfully. Our team will review your documents shortly.",
-		"data":    u,
+		"message": message,
+		"data":    updated,
 	})
 }
 
@@ -1650,8 +1964,8 @@ func (server *Server) analyticsBilling(context fiber.Ctx) error {
 	volume := []fiber.Map{}
 	vRows, _ := server.db.Query(
 		`SELECT DATE(created_at) as d,
-		        COALESCE(SUM(CASE WHEN type = 'credit' THEN amount ELSE 0 END),0) as credits,
-		        COALESCE(SUM(CASE WHEN type = 'debit' THEN amount ELSE 0 END),0) as debits
+		        COALESCE(SUM(CASE WHEN direction = 'credit' THEN amount ELSE 0 END),0) as credits,
+		        COALESCE(SUM(CASE WHEN direction = 'debit' THEN amount ELSE 0 END),0) as debits
 		 FROM transactions
 		 WHERE user_id = ? AND created_at >= ? AND created_at <= ?
 		 GROUP BY d ORDER BY d ASC`,
@@ -1849,200 +2163,6 @@ func (server *Server) liveQueue(context fiber.Ctx) error {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OTP stubs
-// ─────────────────────────────────────────────────────────────────────────────
-
-func (server *Server) otpSend(context fiber.Ctx) error {
-	var req struct {
-		Identifier string `json:"identifier"`
-		Type       string `json:"type"` // "sms" or "email"
-	}
-	if err := json.Unmarshal(context.Body(), &req); err != nil || req.Identifier == "" {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"success": false,
-			"message": "Identifier is required.",
-		})
-	}
-
-	targetType := strings.ToLower(req.Type)
-	if targetType != "email" {
-		targetType = "sms"
-	}
-
-	identifier := strings.TrimSpace(req.Identifier)
-	if targetType == "sms" {
-		if norm, ok := batch.FormatByRegex(identifier); ok {
-			identifier = norm
-		}
-	} else {
-		identifier = strings.ToLower(identifier)
-	}
-
-	// Rate limit check: cooldown 60 seconds
-	var lastSent sql.NullTime
-	err := server.db.QueryRowContext(context.Context(), `
-		SELECT last_sent_at FROM verification_otps 
-		WHERE identifier = ? AND type = ?
-	`, identifier, targetType).Scan(&lastSent)
-
-	if err == nil && lastSent.Valid {
-		if time.Since(lastSent.Time) < 60*time.Second {
-			rem := int(60 - time.Since(lastSent.Time).Seconds())
-			return context.Status(http.StatusTooManyRequests).JSON(fiber.Map{
-				"success":          false,
-				"message":          fmt.Sprintf("Please wait %d seconds before requesting another code.", rem),
-				"cooldown_seconds": rem,
-			})
-		}
-	}
-
-	// Generate 6-digit OTP
-	codeInt := time.Now().UnixNano()%900000 + 100000
-	code := fmt.Sprintf("%06d", codeInt)
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(code), 10)
-	if err != nil {
-		return context.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate OTP"})
-	}
-
-	expiresAt := time.Now().Add(10 * time.Minute)
-
-	// Upsert into verification_otps
-	_, err = server.db.ExecContext(context.Context(), `
-		INSERT INTO verification_otps (identifier, type, otp_hash, attempts, last_sent_at, expires_at, created_at, updated_at)
-		VALUES (?, ?, ?, 0, NOW(), ?, NOW(), NOW())
-		ON DUPLICATE KEY UPDATE 
-			otp_hash = VALUES(otp_hash),
-			attempts = 0,
-			last_sent_at = NOW(),
-			expires_at = VALUES(expires_at),
-			verified_at = NULL,
-			updated_at = NOW()
-	`, identifier, targetType, string(hash), expiresAt)
-	if err != nil {
-		return databaseError(context, err)
-	}
-
-	// Dispatch OTP
-	if targetType == "sms" {
-		var gwDriver, gwCreds string
-		err := server.db.QueryRowContext(context.Context(), `
-			SELECT driver, credentials 
-			FROM gateways 
-			WHERE is_enabled = 1 AND is_otp_enabled = 1 
-			ORDER BY priority ASC, id ASC 
-			LIMIT 1
-		`).Scan(&gwDriver, &gwCreds)
-		if err == nil && gwDriver != "" && gwCreds != "" {
-			appKey := os.Getenv("APP_KEY")
-			enc, eErr := crypto.NewLaravelEncrypter(appKey)
-			if eErr == nil {
-				creds, dErr := enc.DecryptArray(gwCreds)
-				if dErr == nil {
-					driver, drvErr := drivers.CreateDriver(gwDriver, creds)
-					if drvErr == nil {
-						smsReq := sms.SmsRequest{
-							To:   identifier,
-							Body: fmt.Sprintf("Your SMS-Panel verification code is: %s. Valid for 10 minutes.", code),
-						}
-						go func() {
-							bgCtx, cancel := stdctx.WithTimeout(stdctx.Background(), 10*time.Second)
-							defer cancel()
-							_, _ = driver.Send(bgCtx, smsReq)
-						}()
-					}
-				}
-			}
-		}
-	} else if targetType == "email" {
-		body := fmt.Sprintf("<p>Your SMS-Panel verification code is: <b>%s</b>.</p><p>This code will expire in 10 minutes.</p>", code)
-		if server.mailer != nil {
-			_ = server.mailer.SendMail(identifier, "SMS-WhiteInfo Verification Code", body)
-		}
-	}
-
-	return context.JSON(fiber.Map{
-		"success":          true,
-		"message":          "Verification code sent.",
-		"cooldown_seconds": 60,
-	})
-}
-
-func (server *Server) otpVerify(context fiber.Ctx) error {
-	var req struct {
-		Identifier string `json:"identifier"`
-		Type       string `json:"type"`
-		Code       string `json:"code"`
-	}
-	if err := json.Unmarshal(context.Body(), &req); err != nil || req.Identifier == "" || req.Code == "" {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"success": false,
-			"message": "Identifier and code are required.",
-		})
-	}
-
-	targetType := strings.ToLower(req.Type)
-	if targetType != "email" {
-		targetType = "sms"
-	}
-
-	identifier := strings.TrimSpace(req.Identifier)
-	if targetType == "sms" {
-		if norm, ok := batch.FormatByRegex(identifier); ok {
-			identifier = norm
-		}
-	} else {
-		identifier = strings.ToLower(identifier)
-	}
-
-	var id int64
-	var otpHash string
-	var attempts int
-	var expiresAt time.Time
-
-	err := server.db.QueryRowContext(context.Context(), `
-		SELECT id, otp_hash, attempts, expires_at 
-		FROM verification_otps 
-		WHERE identifier = ? AND type = ? AND verified_at IS NULL
-	`, identifier, targetType).Scan(&id, &otpHash, &attempts, &expiresAt)
-	if err != nil {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"success": false,
-			"message": "Invalid or expired verification code.",
-		})
-	}
-
-	if time.Now().After(expiresAt) {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"success": false,
-			"message": "Verification code has expired. Please request a new one.",
-		})
-	}
-
-	if attempts >= 5 {
-		return context.Status(http.StatusTooManyRequests).JSON(fiber.Map{
-			"success": false,
-			"message": "Too many failed attempts. Please request a new code.",
-		})
-	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(otpHash), []byte(req.Code)); err != nil {
-		_, _ = server.db.ExecContext(context.Context(), "UPDATE verification_otps SET attempts = attempts + 1, updated_at = NOW() WHERE id = ?", id)
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"success": false,
-			"message": "Invalid verification code.",
-		})
-	}
-
-	_, _ = server.db.ExecContext(context.Context(), "UPDATE verification_otps SET verified_at = NOW(), updated_at = NOW() WHERE id = ?", id)
-
-	return context.JSON(fiber.Map{
-		"success": true,
-		"message": "Verification successful.",
-	})
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 func extractVariables(body string) []string {

@@ -12,6 +12,13 @@
 		status: string;
 		kyc_status?: string;
 		created_at?: string;
+		plan_name?: string;
+	}
+
+	interface Plan {
+		id: number;
+		name: string;
+		status: string;
 	}
 
 	let searchQuery = $state('');
@@ -25,6 +32,93 @@
 	let transferring = $state(false);
 
 	let customers = $state<Customer[]>([]);
+	let plans = $state<Plan[]>([]);
+	let customerModalOpen = $state(false);
+	let editingCustomer = $state<Customer | null>(null);
+	let formName = $state('');
+	let formEmail = $state('');
+	let formPhone = $state('');
+	let formPassword = $state('');
+	let formStatus = $state('pending');
+	let formPlan = $state('');
+	let formError = $state<string | null>(null);
+	let savingCustomer = $state(false);
+
+	async function loadPlans() {
+		try {
+			const res = await spApi.get<{ data: Plan[] }>('/api/v1/sp/tariff-plans');
+			plans = (res.data ?? []).filter((plan) => plan.status === 'active');
+		} catch {
+			plans = [];
+		}
+	}
+
+	function openCreateModal() {
+		editingCustomer = null;
+		formName = '';
+		formEmail = '';
+		formPhone = '';
+		formPassword = '';
+		formStatus = 'pending';
+		formPlan = '';
+		formError = null;
+		customerModalOpen = true;
+	}
+
+	function openEditModal(customer: Customer) {
+		editingCustomer = customer;
+		formName = customer.name;
+		formEmail = customer.email;
+		formPhone = customer.phone;
+		formPassword = '';
+		formStatus = customer.status;
+		formPlan = '';
+		formError = null;
+		customerModalOpen = true;
+	}
+
+	async function saveCustomer(e: SubmitEvent) {
+		e.preventDefault();
+		savingCustomer = true;
+		formError = null;
+		try {
+			const body: Record<string, unknown> = {
+				name: formName,
+				email: formEmail,
+				phone: formPhone,
+				status: formStatus,
+				tariff_plan_id: formPlan ? Number(formPlan) : null
+			};
+			if (formPassword) body.password = formPassword;
+
+			if (editingCustomer) {
+				await spApi.put(`/api/v1/sp/customers/${editingCustomer.id}`, body);
+				successMsg = 'Customer updated.';
+			} else {
+				await spApi.post('/api/v1/sp/customers', body);
+				successMsg = 'Customer created.';
+			}
+			customerModalOpen = false;
+			await loadCustomers();
+			setTimeout(() => (successMsg = null), 5000);
+		} catch (err) {
+			formError = err instanceof SpApiError ? ((err.data.message as string) ?? 'Unable to save customer.') : 'Unable to save customer.';
+		} finally {
+			savingCustomer = false;
+		}
+	}
+
+	async function deleteCustomer(customer: Customer) {
+		if (!confirm(`Delete ${customer.name}? The account will be soft-deleted.`)) return;
+		try {
+			await spApi.delete(`/api/v1/sp/customers/${customer.id}`);
+			successMsg = 'Customer deleted.';
+			await loadCustomers();
+			setTimeout(() => (successMsg = null), 5000);
+		} catch (err) {
+			alert(err instanceof SpApiError ? ((err.data.message as string) ?? 'Delete failed.') : 'Delete failed.');
+		}
+	}
 
 	async function loadCustomers() {
 		loading = true;
@@ -41,6 +135,7 @@
 
 	onMount(() => {
 		loadCustomers();
+		loadPlans();
 	});
 
 	function openDistributeModal(customer: Customer) {
@@ -56,12 +151,12 @@
 		if (!selectedCustomer) return;
 
 		const amount = parseFloat(transferAmount);
-		if (isNaN(amount) || amount <= 0) {
-			modalError = 'Please enter a valid positive amount.';
+		if (isNaN(amount) || amount === 0) {
+			modalError = 'Please enter a non-zero amount (negative to reverse).';
 			return;
 		}
 
-		if (amount > spAuth.balance) {
+		if (amount > 0 && amount > spAuth.balance) {
 			modalError = 'Insufficient S P Reseller balance.';
 			return;
 		}
@@ -108,6 +203,14 @@
 			<h1 class="text-2xl font-bold tracking-tight text-gray-950 dark:text-white">Assigned Customers</h1>
 			<p class="text-xs text-gray-500 dark:text-gray-400">Manage client accounts and distribute balance directly from your wallet.</p>
 		</div>
+		<div class="flex items-center gap-2">
+			{#if spAuth.can('customers.export')}
+				<a href="/api/v1/sp/customers/export" class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300">Export CSV</a>
+			{/if}
+			{#if spAuth.can('customers.create')}
+				<button type="button" onclick={openCreateModal} class="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600">Add Customer</button>
+			{/if}
+		</div>
 	</div>
 
 	{#if successMsg}
@@ -124,21 +227,23 @@
 						<th class="py-2.5">Customer</th>
 						<th class="py-2.5">Phone</th>
 						<th class="py-2.5">Current Balance</th>
+						<th class="py-2.5">Plan</th>
 						<th class="py-2.5">Status</th>
+						<th class="py-2.5">KYC</th>
 						<th class="py-2.5 text-right">Actions</th>
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-gray-100 dark:divide-gray-800">
 					{#if loading}
 						<tr>
-							<td colspan="5" class="py-8 text-center text-gray-400">
+							<td colspan="7" class="py-8 text-center text-gray-400">
 								<div class="inline-block h-5 w-5 animate-spin rounded-full border-2 border-amber-500 border-t-transparent"></div>
 								<div class="mt-1 text-xs">Loading assigned customers…</div>
 							</td>
 						</tr>
 					{:else if customers.length === 0}
 						<tr>
-							<td colspan="5" class="py-8 text-center text-gray-400">
+							<td colspan="7" class="py-8 text-center text-gray-400">
 								No assigned customers found.
 							</td>
 						</tr>
@@ -151,19 +256,23 @@
 								</td>
 								<td class="py-3 font-mono text-gray-700 dark:text-gray-300">{c.phone || '—'}</td>
 								<td class="py-3 font-mono font-bold text-amber-600 dark:text-amber-400">৳{c.balance.toFixed(2)}</td>
+								<td class="py-3 text-gray-600 dark:text-gray-300">{c.plan_name || '—'}</td>
+								<td class="py-3 text-gray-600 dark:text-gray-300">{c.kyc_status || '—'}</td>
 								<td class="py-3">
 									<span class="inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
 										{c.status}
 									</span>
 								</td>
-								<td class="py-3 text-right">
-									<button
-										type="button"
-										onclick={() => openDistributeModal(c)}
-										class="rounded-lg bg-amber-500 px-3 py-1 text-xs font-semibold text-white shadow-2xs hover:bg-amber-600 transition cursor-pointer"
-									>
-										Fund Balance
-									</button>
+								<td class="py-3 text-right whitespace-nowrap">
+									{#if spAuth.can('billing.manage') && c.status === 'approved'}
+										<button type="button" onclick={() => openDistributeModal(c)} class="rounded-lg bg-amber-500 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-600">Fund</button>
+									{/if}
+									{#if spAuth.can('customers.edit')}
+										<button type="button" onclick={() => openEditModal(c)} class="ml-1 rounded-lg border border-gray-200 px-2 py-1 text-xs font-semibold text-gray-600 dark:border-gray-700 dark:text-gray-300">Edit</button>
+									{/if}
+									{#if spAuth.can('customers.delete')}
+										<button type="button" onclick={() => deleteCustomer(c)} class="ml-1 rounded-lg border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-600 dark:border-rose-900">Delete</button>
+									{/if}
 								</td>
 							</tr>
 						{/each}
@@ -238,6 +347,64 @@
 						{:else}
 							<span>Confirm Transfer</span>
 						{/if}
+					</button>
+				</div>
+			</form>
+		</div>
+	</div>
+{/if}
+
+{#if customerModalOpen}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/50 backdrop-blur-xs p-4">
+		<div class="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6 shadow-2xl dark:border-gray-800 dark:bg-gray-900 space-y-4">
+			<div class="flex items-center justify-between border-b border-gray-100 pb-3 dark:border-gray-800">
+				<h3 class="text-sm font-bold text-gray-900 dark:text-white">{editingCustomer ? 'Edit Customer' : 'Add Customer'}</h3>
+				<button type="button" onclick={() => (customerModalOpen = false)} class="text-gray-400 hover:text-gray-600">✕</button>
+			</div>
+
+			{#if formError}
+				<div class="rounded-xl border border-rose-200 bg-rose-50/80 p-3 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300">{formError}</div>
+			{/if}
+
+			<form onsubmit={saveCustomer} class="space-y-3">
+				<div>
+					<label for="customer-name" class="block text-xs font-medium text-gray-700 dark:text-gray-300">Name</label>
+					<input id="customer-name" bind:value={formName} required class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs dark:border-gray-700 dark:bg-gray-800 dark:text-white" />
+				</div>
+				<div>
+					<label for="customer-email" class="block text-xs font-medium text-gray-700 dark:text-gray-300">Email</label>
+					<input id="customer-email" type="email" bind:value={formEmail} required class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs dark:border-gray-700 dark:bg-gray-800 dark:text-white" />
+				</div>
+				<div>
+					<label for="customer-phone" class="block text-xs font-medium text-gray-700 dark:text-gray-300">Phone</label>
+					<input id="customer-phone" bind:value={formPhone} class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs dark:border-gray-700 dark:bg-gray-800 dark:text-white" />
+				</div>
+				<div>
+					<label for="customer-password" class="block text-xs font-medium text-gray-700 dark:text-gray-300">Password {editingCustomer ? '(leave blank to keep)' : ''}</label>
+					<input id="customer-password" type="password" bind:value={formPassword} required={!editingCustomer} class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs dark:border-gray-700 dark:bg-gray-800 dark:text-white" />
+				</div>
+				<div>
+					<label for="customer-status" class="block text-xs font-medium text-gray-700 dark:text-gray-300">Approval Status</label>
+					<select id="customer-status" bind:value={formStatus} class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs dark:border-gray-700 dark:bg-gray-800 dark:text-white">
+						<option value="pending">Pending</option>
+						<option value="approved">Approved</option>
+						<option value="rejected">Rejected</option>
+						<option value="banned">Banned</option>
+					</select>
+				</div>
+				<div>
+					<label for="customer-plan" class="block text-xs font-medium text-gray-700 dark:text-gray-300">Tariff Plan</label>
+					<select id="customer-plan" bind:value={formPlan} class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs dark:border-gray-700 dark:bg-gray-800 dark:text-white">
+						<option value="">— No plan —</option>
+						{#each plans as plan (plan.id)}
+							<option value={plan.id}>{plan.name}</option>
+						{/each}
+					</select>
+				</div>
+				<div class="flex justify-end gap-2 pt-2">
+					<button type="button" onclick={() => (customerModalOpen = false)} class="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 dark:border-gray-700 dark:text-gray-300">Cancel</button>
+					<button type="submit" disabled={savingCustomer} class="rounded-lg bg-amber-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50">
+						{savingCustomer ? 'Saving…' : 'Save'}
 					</button>
 				</div>
 			</form>

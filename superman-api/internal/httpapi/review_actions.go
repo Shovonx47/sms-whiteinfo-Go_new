@@ -121,6 +121,16 @@ func (server *Server) updateKYCDecision(context fiber.Ctx, newKYCStatus string, 
 	if newKYCStatus == "rejected" {
 		action = "rejected"
 	}
+
+	if newKYCStatus == "verified" {
+		notifyUser(transaction, userID, "KYC Approved", "Your KYC documents have been verified and approved.", "success")
+	} else {
+		reason := strings.TrimPrefix(note, "Reason: ")
+		if separator := strings.Index(reason, " | Remarks: "); separator >= 0 {
+			reason = reason[:separator]
+		}
+		notifyUser(transaction, userID, "KYC Rejected", "Your KYC documents were rejected. Reason: "+reason, "danger")
+	}
 	_, err = transaction.Exec(`
 		INSERT INTO kyc_audit_logs
 			(user_id, admin_id, admin_name, action, field_name, old_value, new_value, note, ip_address, created_at, updated_at)

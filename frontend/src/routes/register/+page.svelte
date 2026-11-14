@@ -413,9 +413,14 @@
 				throw new Error(msg);
 			}
 
+			const token = data?.data?.token ?? data?.token;
+			if (token) {
+				api.setToken(token, true);
+			}
+
 			toast.success('Registration Complete', 'Your account has been created. Your KYC is under review.');
 			await auth.init();
-			goto('/customer');
+			goto('/account/pending');
 		} catch (err: unknown) {
 			generalError = err instanceof Error ? err.message : 'Registration failed. Please check all fields.';
 			toast.error('Registration Failed', generalError);

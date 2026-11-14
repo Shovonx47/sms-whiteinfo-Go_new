@@ -21,6 +21,11 @@
 	let loading = $state(true);
 	let actionMsg = $state<string | null>(null);
 
+	let rejectTarget = $state<WhitelistRequest | null>(null);
+	let rejectNote = $state('');
+	let rejectError = $state('');
+	let rejecting = $state(false);
+
 	async function loadRequests() {
 		loading = true;
 		try {
@@ -35,13 +40,31 @@
 
 	onMount(loadRequests);
 
-	async function updateStatus(id: number, action: 'approve' | 'reject') {
+	async function updateStatus(id: number, action: 'approve' | 'reject', note = '') {
 		try {
-			await supermanApi.post(`/api/v1/superman/approval-center/ip-whitelists/${id}/${action}`, {});
+			await supermanApi.post(`/api/v1/superman/approval-center/ip-whitelists/${id}/${action}`, action === 'reject' ? { admin_note: note } : {});
 			actionMsg = `IP request #${id} has been ${action}d.`;
 			await loadRequests();
 		} catch (e: any) {
 			alert(e?.message || `Failed to ${action} IP request.`);
+		}
+	}
+
+	async function submitReject() {
+		if (!rejectTarget) return;
+		rejectError = '';
+		if (!rejectNote.trim()) {
+			rejectError = 'A rejection reason is required.';
+			return;
+		}
+
+		rejecting = true;
+		try {
+			await updateStatus(rejectTarget.id, 'reject', rejectNote.trim());
+			rejectTarget = null;
+			rejectNote = '';
+		} finally {
+			rejecting = false;
 		}
 	}
 
@@ -136,7 +159,7 @@
 											</button>
 											<button
 												type="button"
-												onclick={() => updateStatus(r.id, 'reject')}
+												onclick={() => { rejectTarget = r; rejectNote = ''; rejectError = ''; }}
 												class="rounded bg-red-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-red-700"
 											>
 												Reject
@@ -154,4 +177,44 @@
 		</div>
 	</div>
 </div>
+
+{#if rejectTarget}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+		<div class="w-full max-w-md rounded-xl bg-white p-5 shadow-xl dark:bg-gray-900">
+			<h2 class="text-sm font-bold text-gray-900 dark:text-white">Reject IP Whitelist Request</h2>
+			<p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+				Provide a reason so the customer knows why <span class="font-mono">{rejectTarget.ip_address}</span> was rejected.
+			</p>
+
+			<textarea
+				bind:value={rejectNote}
+				rows="3"
+				placeholder="e.g. Invalid IP format or verification failed."
+				class="mt-3 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+			></textarea>
+
+			{#if rejectError}
+				<p class="mt-2 text-xs text-red-600 dark:text-red-400">{rejectError}</p>
+			{/if}
+
+			<div class="mt-4 flex justify-end gap-2">
+				<button
+					type="button"
+					onclick={() => (rejectTarget = null)}
+					class="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+				>
+					Cancel
+				</button>
+				<button
+					type="button"
+					onclick={submitReject}
+					disabled={rejecting}
+					class="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+				>
+					{rejecting ? 'Rejecting…' : 'Reject request'}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
 

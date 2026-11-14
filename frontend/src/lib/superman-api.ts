@@ -61,6 +61,30 @@ export const supermanApi = {
 	put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
 	patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
 	delete: <T>(path: string) => request<T>('DELETE', path),
+	async download(path: string, fallbackFilename: string): Promise<void> {
+		const response = await fetch(`${baseURL}${path}`, {
+			headers: { Accept: 'application/octet-stream', ...authorizationHeader() }
+		});
+		if (!response.ok) {
+			let data: Record<string, unknown> = {};
+			try {
+				data = await response.json();
+			} catch {
+				// ignore non-JSON failures
+			}
+			throw new SupermanApiError(response.status, data);
+		}
+
+		const blob = await response.blob();
+		const url = URL.createObjectURL(blob);
+		const anchor = document.createElement('a');
+		anchor.href = url;
+		anchor.download = fallbackFilename;
+		document.body.appendChild(anchor);
+		anchor.click();
+		anchor.remove();
+		URL.revokeObjectURL(url);
+	},
 	clearToken(): void {
 		if (typeof window === 'undefined') {
 			return;

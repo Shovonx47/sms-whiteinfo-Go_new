@@ -10,39 +10,86 @@
 		description?: string;
 		contacts_count: number;
 		created_at: string;
+		updated_at?: string;
 	}
 
 	interface Meta {
 		total: number;
 		per_page: number;
 		current_page: number;
+		last_page?: number;
 	}
 
 	let groups = $state<ContactGroup[]>([]);
-	let meta = $state<Meta>({ total: 0, per_page: 10, current_page: 1 });
+	let meta = $state<Meta>({ total: 0, per_page: 10, current_page: 1, last_page: 1 });
 	let loading = $state(true);
 	let search = $state('');
 	let perPage = $state(10);
 	let currentPage = $state(1);
+	let searchTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	let selectedGroupId = $state<number | null>(null);
+	let selectedIds = $state<number[]>([]);
+	let bulkDeleteOpen = $state(false);
+	let bulkDeleting = $state(false);
+	let viewModalOpen = $state(false);
+	let viewGroup = $state<ContactGroup | null>(null);
 	let deleteConfirmOpen = $state(false);
 	let groupToDelete = $state<ContactGroup | null>(null);
 
 	async function load(p = 1) {
 		loading = true;
 		currentPage = p;
+		selectedIds = [];
 		try {
 			const params = new URLSearchParams({ page: String(p), per_page: String(perPage) });
-			if (search) params.set('search', search);
+			if (search.trim()) params.set('search', search.trim());
 			const data = await api.get<{ data: ContactGroup[]; meta: Meta }>(`/api/v1/customer/groups?${params}`);
 			groups = data.data || [];
-			meta = data.meta || { total: 0, per_page: perPage, current_page: p };
+			meta = data.meta || { total: 0, per_page: perPage, current_page: p, last_page: 1 };
 		} catch {
 			groups = [];
-			meta = { total: 0, per_page: perPage, current_page: p };
+			meta = { total: 0, per_page: perPage, current_page: p, last_page: 1 };
 		} finally {
 			loading = false;
+		}
+	}
+
+	function handleSearchInput() {
+		if (searchTimeout) clearTimeout(searchTimeout);
+		searchTimeout = setTimeout(() => load(1), 300);
+	}
+
+	function toggleSelectAllGroups() {
+		if (filteredGroups.length > 0 && selectedIds.length === filteredGroups.length) {
+			selectedIds = [];
+		} else {
+			selectedIds = filteredGroups.map((g) => g.id);
+		}
+	}
+
+	function toggleSelectGroup(id: number) {
+		if (selectedIds.includes(id)) {
+			selectedIds = selectedIds.filter((item) => item !== id);
+		} else {
+			selectedIds = [...selectedIds, id];
+		}
+	}
+
+	async function handleBulkDeleteGroups() {
+		if (selectedIds.length === 0) return;
+		bulkDeleting = true;
+		try {
+			await api.post('/api/v1/customer/groups/bulk-delete', { ids: selectedIds });
+			toast.success('Groups Deleted', `${selectedIds.length} group(s) deleted.`);
+			bulkDeleteOpen = false;
+			selectedIds = [];
+			load(1);
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : 'Failed to delete selected groups.';
+			toast.error('Bulk Delete Error', msg);
+		} finally {
+			bulkDeleting = false;
 		}
 	}
 
@@ -103,8 +150,19 @@
 
 	<!-- Main Card -->
 	<div class="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-		<!-- Toolbar: Search + Column Toggle -->
-		<div class="flex items-center justify-end gap-2 border-b border-gray-100 p-3 bg-white">
+		<!-- Toolbar: Bulk Delete + Search -->
+		<div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 p-3 bg-white">
+			<div>
+				{#if selectedIds.length > 0}
+					<button
+						type="button"
+						onclick={() => (bulkDeleteOpen = true)}
+						class="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 cursor-pointer"
+					>
+						Delete Selected ({selectedIds.length})
+					</button>
+				{/if}
+			</div>
 			<div class="relative w-64">
 				<div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-2.5">
 					<svg class="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -114,6 +172,7 @@
 				<input
 					type="text"
 					bind:value={search}
+					oninput={handleSearchInput}
 					placeholder="Search"
 					class="w-full rounded-lg border border-gray-300 bg-white py-1.5 pr-3 pl-8 text-xs text-gray-900 placeholder-gray-400 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
 				/>
@@ -126,7 +185,12 @@
 				<thead>
 					<tr class="border-b border-gray-200 bg-gray-50/70 text-gray-600 font-semibold tracking-wider uppercase text-[11px]">
 						<th class="w-10 py-3 px-4">
-							<input type="checkbox" class="rounded border-gray-300 text-teal-600 focus:ring-teal-500" />
+							<input
+								type="checkbox"
+								checked={filteredGroups.length > 0 && selectedIds.length === filteredGroups.length}
+								onchange={toggleSelectAllGroups}
+								class="rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+							/>
 						</th>
 						<th class="py-3 px-4">NAME</th>
 						<th class="py-3 px-4">CONTACTS</th>
@@ -154,7 +218,12 @@
 						{#each filteredGroups as group (group.id)}
 							<tr class="hover:bg-gray-50/70 transition">
 								<td class="py-3 px-4">
-									<input type="checkbox" class="rounded border-gray-300 text-teal-600 focus:ring-teal-500" />
+									<input
+										type="checkbox"
+										checked={selectedIds.includes(group.id)}
+										onchange={() => toggleSelectGroup(group.id)}
+										class="rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+									/>
 								</td>
 								<td class="py-3 px-4 whitespace-nowrap">
 									<a
@@ -177,6 +246,17 @@
 								</td>
 								<td class="py-3 px-4 text-right whitespace-nowrap">
 									<div class="flex items-center justify-end gap-1">
+										<button
+											type="button"
+											onclick={() => { viewGroup = group; viewModalOpen = true; }}
+											class="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 cursor-pointer"
+											title="View group"
+										>
+											<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+												<path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" />
+												<path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+											</svg>
+										</button>
 										<a
 											href="/audience/groups/{group.id}/edit"
 											class="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-teal-600 cursor-pointer"
@@ -206,25 +286,134 @@
 		</div>
 
 		<!-- Pagination Footer -->
-		<div class="flex items-center justify-between border-t border-gray-200 px-4 py-3 bg-white text-xs text-gray-600">
+		<div class="flex flex-wrap items-center justify-between gap-2 border-t border-gray-200 px-4 py-3 bg-white text-xs text-gray-600">
 			<div>
 				Showing {filteredGroups.length > 0 ? (currentPage - 1) * perPage + 1 : 0} to {Math.min(currentPage * perPage, meta.total)} of {meta.total} results
 			</div>
-			<div class="flex items-center gap-2">
-				<span class="text-xs text-gray-500">Per page</span>
-				<select
-					bind:value={perPage}
-					onchange={() => load(1)}
-					class="rounded-lg border border-gray-300 bg-white py-1 px-2 text-xs text-gray-700 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
-				>
-					<option value={10}>10</option>
-					<option value={25}>25</option>
-					<option value={50}>50</option>
-				</select>
+			<div class="flex items-center gap-3">
+				<div class="flex items-center gap-2">
+					<span class="text-xs text-gray-500">Per page</span>
+					<select
+						bind:value={perPage}
+						onchange={() => load(1)}
+						class="rounded-lg border border-gray-300 bg-white py-1 px-2 text-xs text-gray-700 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
+					>
+						<option value={10}>10</option>
+						<option value={25}>25</option>
+						<option value={50}>50</option>
+					</select>
+				</div>
+				{#if (meta.last_page ?? 1) > 1}
+					<div class="flex items-center gap-1">
+						<button
+							type="button"
+							disabled={currentPage <= 1}
+							onclick={() => load(currentPage - 1)}
+							class="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 cursor-pointer"
+						>
+							Previous
+						</button>
+						<span class="px-2 text-xs text-gray-500">Page {currentPage} / {meta.last_page ?? 1}</span>
+						<button
+							type="button"
+							disabled={currentPage >= (meta.last_page ?? 1)}
+							onclick={() => load(currentPage + 1)}
+							class="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 cursor-pointer"
+						>
+							Next
+						</button>
+					</div>
+				{/if}
 			</div>
 		</div>
 	</div>
 </div>
+
+<!-- View Group Modal -->
+{#if viewModalOpen && viewGroup}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in backdrop-blur-xs">
+		<div class="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-xl border border-gray-100">
+			<div class="flex items-center justify-between border-b border-gray-100 pb-3">
+				<h3 class="text-base font-bold text-gray-900">Group Details</h3>
+				<button
+					type="button"
+					onclick={() => (viewModalOpen = false)}
+					class="text-gray-400 hover:text-gray-600 cursor-pointer"
+				>
+					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+					</svg>
+				</button>
+			</div>
+			<div class="mt-4 grid grid-cols-2 gap-4 text-xs">
+				<div>
+					<p class="text-[11px] font-medium uppercase tracking-wider text-gray-400">Group Name</p>
+					<p class="mt-1 font-bold text-gray-900">{viewGroup.name}</p>
+				</div>
+				<div>
+					<p class="text-[11px] font-medium uppercase tracking-wider text-gray-400">Contacts</p>
+					<p class="mt-1 font-semibold text-teal-700">{viewGroup.contacts_count || 0}</p>
+				</div>
+				<div class="col-span-2">
+					<p class="text-[11px] font-medium uppercase tracking-wider text-gray-400">Description</p>
+					<p class="mt-1 text-gray-700">{viewGroup.description || '—'}</p>
+				</div>
+				<div>
+					<p class="text-[11px] font-medium uppercase tracking-wider text-gray-400">Created At</p>
+					<p class="mt-1 text-gray-700">{new Date(viewGroup.created_at).toLocaleString()}</p>
+				</div>
+				<div>
+					<p class="text-[11px] font-medium uppercase tracking-wider text-gray-400">Updated At</p>
+					<p class="mt-1 text-gray-700">{new Date(viewGroup.updated_at || viewGroup.created_at).toLocaleString()}</p>
+				</div>
+			</div>
+			<div class="mt-6 flex items-center justify-end gap-3 border-t border-gray-100 pt-3">
+				<a
+					href="/audience/groups/{viewGroup.id}/edit"
+					class="rounded-lg bg-teal-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-teal-700"
+				>
+					Edit Group
+				</a>
+				<button
+					type="button"
+					onclick={() => (viewModalOpen = false)}
+					class="rounded-lg border border-gray-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer"
+				>
+					Close
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Bulk Delete Groups Modal -->
+{#if bulkDeleteOpen}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in backdrop-blur-xs">
+		<div class="relative w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl border border-gray-100">
+			<h3 class="text-base font-bold text-gray-900">Delete Selected Groups</h3>
+			<p class="mt-2 text-xs text-gray-600">
+				Are you sure you want to delete <span class="font-semibold text-gray-900">{selectedIds.length}</span> selected group{selectedIds.length === 1 ? '' : 's'}? Contacts inside will remain in your directory.
+			</p>
+			<div class="mt-6 flex items-center justify-end gap-3">
+				<button
+					type="button"
+					onclick={() => (bulkDeleteOpen = false)}
+					class="rounded-lg border border-gray-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer"
+				>
+					Cancel
+				</button>
+				<button
+					type="button"
+					disabled={bulkDeleting}
+					onclick={handleBulkDeleteGroups}
+					class="rounded-lg bg-red-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+				>
+					{bulkDeleting ? 'Deleting...' : 'Delete'}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
 
 <!-- Delete Confirmation Modal -->
 {#if deleteConfirmOpen && groupToDelete}

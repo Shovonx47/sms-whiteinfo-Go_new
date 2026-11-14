@@ -86,6 +86,13 @@
 					</div>
 
 					<a
+						href="/sp/profile"
+						class="flex items-center gap-2 px-3.5 py-2 text-xs text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-700"
+					>
+						Profile & Password
+					</a>
+
+					<a
 						href="/sp/wallet"
 						class="flex items-center gap-2 px-3.5 py-2 text-xs text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-700"
 					>

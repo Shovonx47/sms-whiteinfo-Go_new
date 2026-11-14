@@ -21,9 +21,10 @@
 		updatingProfile = true;
 		try {
 			await api.put('/api/v1/customer/profile', { name, phone });
+			await auth.refresh();
 			toast.success('Profile Updated', 'Your contact details have been updated.');
-		} catch {
-			toast.info('Profile Saved', 'Your changes were recorded.');
+		} catch (err) {
+			toast.error('Update Failed', err instanceof Error ? err.message : 'Unable to update your profile.');
 		} finally {
 			updatingProfile = false;
 		}
@@ -51,11 +52,8 @@
 			currentPassword = '';
 			newPassword = '';
 			confirmPassword = '';
-		} catch {
-			toast.info('Security Updated', 'Password update simulated.');
-			currentPassword = '';
-			newPassword = '';
-			confirmPassword = '';
+		} catch (err) {
+			toast.error('Password Update Failed', err instanceof Error ? err.message : 'Unable to update your password.');
 		} finally {
 			updatingPassword = false;
 		}

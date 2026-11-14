@@ -127,7 +127,7 @@
 									<button
 										type="button"
 										class="text-xs text-emerald-600 hover:text-emerald-700 font-medium mr-3"
-										onclick={() => alert(`Downloading archive ${b.filename}`)}
+										onclick={() => supermanApi.download(`/api/v1/superman/system-settings/backups/download/${encodeURIComponent(b.filename)}`, b.filename).catch((e: any) => alert(e?.message || 'Download failed.'))}
 									>
 										Download
 									</button>

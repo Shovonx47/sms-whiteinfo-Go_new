@@ -366,27 +366,27 @@ type GatewayBillingSummary struct {
 }
 
 type GatewayDetailResponse struct {
-	ID                   int64                  `json:"id"`
-	Name                 string                 `json:"name"`
-	Driver               string                 `json:"driver"`
-	RouteCode            *string                `json:"route_code"`
-	Priority             int                    `json:"priority"`
-	IsEnabled            bool                   `json:"is_enabled"`
-	Enabled              bool                   `json:"enabled"`
-	IsOtpEnabled         bool                   `json:"is_otp_enabled"`
-	OtpEnabled           bool                   `json:"otp_enabled"`
-	SupportsBulk         bool                   `json:"supports_bulk"`
-	RequestsPerSecond    int                    `json:"requests_per_second"`
-	TimeoutSeconds       int                    `json:"timeout_seconds"`
-	DlrSupport           bool                   `json:"dlr_support"`
-	CostMode             string                 `json:"cost_mode"`
-	DippingRequired      bool                   `json:"dipping_required"`
-	HasThirdPartyDipping bool                   `json:"has_third_party_dipping"`
-	HealthStatus         string                 `json:"health_status"`
-	CreatedAt            string                 `json:"created_at"`
-	UpdatedAt            string                 `json:"updated_at"`
-	Credentials          map[string]any         `json:"credentials,omitempty"`
-	BillingSummary       GatewayBillingSummary  `json:"billing_summary"`
+	ID                   int64                 `json:"id"`
+	Name                 string                `json:"name"`
+	Driver               string                `json:"driver"`
+	RouteCode            *string               `json:"route_code"`
+	Priority             int                   `json:"priority"`
+	IsEnabled            bool                  `json:"is_enabled"`
+	Enabled              bool                  `json:"enabled"`
+	IsOtpEnabled         bool                  `json:"is_otp_enabled"`
+	OtpEnabled           bool                  `json:"otp_enabled"`
+	SupportsBulk         bool                  `json:"supports_bulk"`
+	RequestsPerSecond    int                   `json:"requests_per_second"`
+	TimeoutSeconds       int                   `json:"timeout_seconds"`
+	DlrSupport           bool                  `json:"dlr_support"`
+	CostMode             string                `json:"cost_mode"`
+	DippingRequired      bool                  `json:"dipping_required"`
+	HasThirdPartyDipping bool                  `json:"has_third_party_dipping"`
+	HealthStatus         string                `json:"health_status"`
+	CreatedAt            string                `json:"created_at"`
+	UpdatedAt            string                `json:"updated_at"`
+	Credentials          map[string]any        `json:"credentials,omitempty"`
+	BillingSummary       GatewayBillingSummary `json:"billing_summary"`
 }
 
 func (server *Server) gatewayDetail(context fiber.Ctx) error {
@@ -503,28 +503,28 @@ func (server *Server) gatewayDetail(context fiber.Ctx) error {
 		)
 	}
 
-		summary.Revenue = math.Round(summary.Revenue*100) / 100
-		summary.OperatorCost = math.Round(summary.OperatorCost*100) / 100
-		summary.DippingCost = math.Round(summary.DippingCost*100) / 100
-		summary.TotalCost = math.Round((summary.OperatorCost+summary.DippingCost+thirdPartyCost)*100) / 100
-		summary.NetProfit = math.Round((summary.Revenue-summary.TotalCost)*100) / 100
+	summary.Revenue = math.Round(summary.Revenue*100) / 100
+	summary.OperatorCost = math.Round(summary.OperatorCost*100) / 100
+	summary.DippingCost = math.Round(summary.DippingCost*100) / 100
+	summary.TotalCost = math.Round((summary.OperatorCost+summary.DippingCost+thirdPartyCost)*100) / 100
+	summary.NetProfit = math.Round((summary.Revenue-summary.TotalCost)*100) / 100
 
-		if summary.Revenue > 0 {
-			summary.ProfitMargin = math.Round((summary.NetProfit/summary.Revenue)*1000) / 10
+	if summary.Revenue > 0 {
+		summary.ProfitMargin = math.Round((summary.NetProfit/summary.Revenue)*1000) / 10
+	} else {
+		summary.ProfitMargin = 0.0
+	}
+
+	if g.DlrSupport {
+		denom := delivered + dlrPending + dlrFailed
+		if denom > 0 {
+			pct := math.Round((float64(delivered)/float64(denom))*1000) / 10
+			summary.DlrDeliveryPercent = &pct
 		} else {
-			summary.ProfitMargin = 0.0
+			zero := 0.0
+			summary.DlrDeliveryPercent = &zero
 		}
-
-		if g.DlrSupport {
-			denom := delivered + dlrPending + dlrFailed
-			if denom > 0 {
-				pct := math.Round((float64(delivered)/float64(denom))*1000) / 10
-				summary.DlrDeliveryPercent = &pct
-			} else {
-				zero := 0.0
-				summary.DlrDeliveryPercent = &zero
-			}
-		}
+	}
 
 	g.BillingSummary = summary
 

@@ -3,6 +3,7 @@
 	import { supermanApi } from '$lib/superman-api.js';
 	import ExportDropdown from '$lib/components/common/ExportDropdown.svelte';
 	import type { ExportColumn } from '$lib/utils/export.js';
+	import { toast } from '$lib/stores/toast.svelte.js';
 
 	interface TemplateItem {
 		id: number;
@@ -18,6 +19,37 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let search = $state('');
+
+	let acting = $state<number | null>(null);
+
+	async function approve(t: TemplateItem) {
+		if (!confirm(`Approve template "${t.name}"? The customer will be able to use it without daily approvals and it will be locked from editing.`)) return;
+		acting = t.id;
+		try {
+			await supermanApi.post(`/api/v1/superman/templates/${t.id}/approve`, {});
+			toast.success('Template approved', t.name);
+			await loadTemplates();
+		} catch (err) {
+			toast.error('Approval failed', err instanceof Error ? err.message : 'Unable to approve template.');
+		} finally {
+			acting = null;
+		}
+	}
+
+	async function reject(t: TemplateItem) {
+		const reason = prompt(`Reason for rejecting "${t.name}":`);
+		if (!reason || !reason.trim()) return;
+		acting = t.id;
+		try {
+			await supermanApi.post(`/api/v1/superman/templates/${t.id}/reject`, { reason: reason.trim() });
+			toast.success('Template rejected', t.name);
+			await loadTemplates();
+		} catch (err) {
+			toast.error('Rejection failed', err instanceof Error ? err.message : 'Unable to reject template.');
+		} finally {
+			acting = null;
+		}
+	}
 
 	async function loadTemplates() {
 		loading = true;
@@ -102,6 +134,7 @@
 							<th class="px-4 py-3">Content Body</th>
 							<th class="px-4 py-3">Approval State</th>
 							<th class="px-4 py-3 text-right">Created At</th>
+							<th class="px-4 py-3 text-right">Actions</th>
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-gray-100 dark:divide-gray-800">
@@ -117,6 +150,16 @@
 									</span>
 								</td>
 								<td class="px-4 py-3 text-right text-gray-400">{new Date(t.created_at).toLocaleDateString()}</td>
+								<td class="px-4 py-3 text-right">
+									{#if t.approval === 'pending'}
+										<div class="flex justify-end gap-1.5">
+											<button onclick={() => approve(t)} disabled={acting === t.id} class="rounded-md bg-emerald-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">Approve</button>
+											<button onclick={() => reject(t)} disabled={acting === t.id} class="rounded-md border border-rose-200 px-2 py-1 text-[10px] font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">Reject</button>
+										</div>
+									{:else}
+										<span class="text-[10px] text-gray-400">—</span>
+									{/if}
+								</td>
 							</tr>
 						{/each}
 					</tbody>

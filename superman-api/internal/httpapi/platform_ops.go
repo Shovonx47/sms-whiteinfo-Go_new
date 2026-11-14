@@ -1,9 +1,17 @@
 package httpapi
 
 import (
+	"compress/gzip"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -62,18 +70,17 @@ func (server *Server) systemSettingsQueue(context fiber.Ctx) error {
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM messages WHERE status = 'delivered'").Scan(&sentCount)
 
 	queues := []queueItem{
-		{Name: "default", Connection: "Redis (Horizon)", Size: quickPending, Status: "Active"},
-		{Name: "batches", Connection: "Redis (Horizon)", Size: bulkPending, Status: "Active"},
-		{Name: "sms-sending", Connection: "Redis (Horizon)", Size: 0, Status: "Active"},
-		{Name: "dlr-callbacks", Connection: "Redis (Horizon)", Size: 0, Status: "Active"},
+		{Name: "messages", Connection: "MySQL + Go worker pool", Size: quickPending, Status: "Active"},
+		{Name: "batches", Connection: "MySQL + Go batch processor", Size: bulkPending, Status: "Active"},
 	}
 
 	return context.JSON(fiber.Map{
 		"data": queues,
 		"meta": fiber.Map{
 			"total_pending": quickPending + bulkPending,
-			"workers":       8,
-			"supervisor":    "sms-worker-pool",
+			"workers":       1,
+			"supervisor":    "customer-api worker pool",
+			"sent_total":    sentCount,
 		},
 	})
 }
@@ -88,19 +95,35 @@ type errorCodeItem struct {
 
 func (server *Server) systemSettingsErrorCodes(context fiber.Ctx) error {
 	codes := []errorCodeItem{
-		{Code: 1000, Name: "SUCCESS", Category: "Success (1000–1099)", HttpStatus: 200, Description: "Request processed successfully."},
-		{Code: 1001, Name: "QUEUED", Category: "Success (1000–1099)", HttpStatus: 202, Description: "SMS accepted and placed in the transmission queue."},
-		{Code: 2001, Name: "UNAUTHENTICATED", Category: "Authentication (2000–2099)", HttpStatus: 401, Description: "Missing or invalid Bearer API token."},
-		{Code: 2002, Name: "IP_NOT_WHITELISTED", Category: "Authentication (2000–2099)", HttpStatus: 403, Description: "Client IP is not registered on authorized whitelist."},
-		{Code: 2003, Name: "ACCOUNT_SUSPENDED", Category: "Authentication (2000–2099)", HttpStatus: 403, Description: "Account is banned, rejected, or pending verification."},
-		{Code: 3001, Name: "INSUFFICIENT_BALANCE", Category: "Billing & Balance (3000–3099)", HttpStatus: 402, Description: "Wallet balance is insufficient to route the SMS batch."},
-		{Code: 3002, Name: "TARIFF_NOT_ASSIGNED", Category: "Billing & Balance (3000–3099)", HttpStatus: 400, Description: "No active tariff plan or rate matrix assigned to account."},
-		{Code: 4001, Name: "INVALID_RECIPIENT", Category: "Validation & Requests (4000–4099)", HttpStatus: 422, Description: "Destination MSISDN does not match Bangladeshi E.164 phone standard."},
-		{Code: 4002, Name: "INVALID_SENDER_ID", Category: "Validation & Requests (4000–4099)", HttpStatus: 422, Description: "Sender / CLI header is unapproved or not assigned to user."},
-		{Code: 4003, Name: "MESSAGE_BODY_EMPTY", Category: "Validation & Requests (4000–4099)", HttpStatus: 422, Description: "SMS text payload cannot be empty."},
-		{Code: 4004, Name: "SPAM_CONTENT_DETECTED", Category: "Validation & Requests (4000–4099)", HttpStatus: 422, Description: "Message contains restricted blacklisted keywords or fraud triggers."},
-		{Code: 5001, Name: "GATEWAY_TIMEOUT", Category: "Gateway & Server (5000–5099)", HttpStatus: 504, Description: "Upstream telecommunications carrier failed to respond in timeout window."},
-		{Code: 5002, Name: "NO_HEALTHY_ROUTE", Category: "Gateway & Server (5000–5099)", HttpStatus: 503, Description: "All primary and failover carrier routes are currently unreachable."},
+		{Code: 1000, Name: "SMS_SUBMITTED", Category: "Success (1000–1099)", HttpStatus: 200, Description: "SMS Submitted Successfully"},
+		{Code: 1001, Name: "VOICE_SMS_SUBMITTED", Category: "Success (1000–1099)", HttpStatus: 200, Description: "Voice SMS Submitted Successfully"},
+		{Code: 1002, Name: "REQUEST_ACCEPTED", Category: "Success (1000–1099)", HttpStatus: 202, Description: "Request Accepted"},
+		{Code: 1003, Name: "DELIVERY_REPORT_AVAILABLE", Category: "Success (1000–1099)", HttpStatus: 200, Description: "Delivery Report Available"},
+		{Code: 2000, Name: "INVALID_API_KEY", Category: "Authentication (2000–2099)", HttpStatus: 401, Description: "Invalid API Key"},
+		{Code: 2001, Name: "API_KEY_MISSING", Category: "Authentication (2000–2099)", HttpStatus: 401, Description: "API Key Missing"},
+		{Code: 2002, Name: "ACCOUNT_SUSPENDED", Category: "Authentication (2000–2099)", HttpStatus: 403, Description: "Account Suspended"},
+		{Code: 2003, Name: "IP_NOT_WHITELISTED", Category: "Authentication (2000–2099)", HttpStatus: 403, Description: "IP Not Whitelisted"},
+		{Code: 2004, Name: "PERMISSION_DENIED", Category: "Authentication (2000–2099)", HttpStatus: 403, Description: "Permission Denied"},
+		{Code: 3000, Name: "INSUFFICIENT_BALANCE", Category: "Billing & Balance (3000–3099)", HttpStatus: 402, Description: "Insufficient Balance"},
+		{Code: 3001, Name: "INVALID_AMOUNT", Category: "Billing & Balance (3000–3099)", HttpStatus: 402, Description: "Invalid Amount"},
+		{Code: 3002, Name: "TRANSACTION_FAILED", Category: "Billing & Balance (3000–3099)", HttpStatus: 402, Description: "Transaction Failed"},
+		{Code: 3003, Name: "DUPLICATE_TRANSACTION", Category: "Billing & Balance (3000–3099)", HttpStatus: 402, Description: "Duplicate Transaction"},
+		{Code: 3004, Name: "BILLING_ERROR", Category: "Billing & Balance (3000–3099)", HttpStatus: 402, Description: "Billing Error"},
+		{Code: 4000, Name: "INVALID_MOBILE_NUMBER", Category: "Validation (4000–4099)", HttpStatus: 422, Description: "Invalid Mobile Number"},
+		{Code: 4001, Name: "INVALID_SENDER_ID", Category: "Validation (4000–4099)", HttpStatus: 422, Description: "Invalid Sender ID"},
+		{Code: 4002, Name: "INVALID_MESSAGE", Category: "Validation (4000–4099)", HttpStatus: 422, Description: "Invalid Message"},
+		{Code: 4003, Name: "MISSING_REQUIRED_PARAMETER", Category: "Validation (4000–4099)", HttpStatus: 422, Description: "Missing Required Parameter"},
+		{Code: 4004, Name: "INVALID_REQUEST_FORMAT", Category: "Validation (4000–4099)", HttpStatus: 422, Description: "Invalid Request Format"},
+		{Code: 4005, Name: "DAILY_LIMIT_EXCEEDED", Category: "Validation (4000–4099)", HttpStatus: 429, Description: "Daily Limit Exceeded"},
+		{Code: 4006, Name: "DUPLICATE_REQUEST", Category: "Validation (4000–4099)", HttpStatus: 422, Description: "Duplicate Request"},
+		{Code: 4007, Name: "INVALID_SCHEDULE_TIME", Category: "Validation (4000–4099)", HttpStatus: 422, Description: "Invalid Schedule Time"},
+		{Code: 5000, Name: "SMS_PROVIDER_FAILED", Category: "Provider & Server (5000–5099)", HttpStatus: 502, Description: "SMS Provider Failed"},
+		{Code: 5001, Name: "VOICE_PROVIDER_FAILED", Category: "Provider & Server (5000–5099)", HttpStatus: 502, Description: "Voice Provider Failed"},
+		{Code: 5002, Name: "ROUTE_NOT_AVAILABLE", Category: "Provider & Server (5000–5099)", HttpStatus: 502, Description: "Route Not Available"},
+		{Code: 5003, Name: "PROVIDER_TIMEOUT", Category: "Provider & Server (5000–5099)", HttpStatus: 504, Description: "Provider Timeout"},
+		{Code: 5004, Name: "INTERNAL_SERVER_ERROR", Category: "Provider & Server (5000–5099)", HttpStatus: 500, Description: "Internal Server Error"},
+		{Code: 5005, Name: "SERVICE_TEMPORARILY_UNAVAILABLE", Category: "Provider & Server (5000–5099)", HttpStatus: 503, Description: "Service Temporarily Unavailable"},
+		{Code: 5006, Name: "RATE_LIMIT_EXCEEDED", Category: "Provider & Server (5000–5099)", HttpStatus: 429, Description: "Rate Limit Exceeded"},
 	}
 
 	return context.JSON(fiber.Map{"data": codes})
@@ -125,83 +148,277 @@ func (server *Server) systemSettingsDlr(context fiber.Ctx) error {
 	})
 }
 
+func (server *Server) settingValue(group, name string) any {
+	var payload []byte
+	if err := server.db.QueryRow(
+		"SELECT payload FROM settings WHERE `group` = ? AND name = ? LIMIT 1",
+		group, name,
+	).Scan(&payload); err != nil {
+		return nil
+	}
+
+	var value any
+	if json.Unmarshal(payload, &value) != nil {
+		return nil
+	}
+
+	return value
+}
+
+func (server *Server) putSetting(group, name string, value any) error {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+
+	_, err = server.db.Exec(`
+		INSERT INTO settings (`+"`group`"+`, name, payload, created_at, updated_at)
+		VALUES (?, ?, ?, NOW(), NOW())
+		ON DUPLICATE KEY UPDATE payload = VALUES(payload), updated_at = NOW()
+	`, group, name, string(encoded))
+
+	return err
+}
+
 func (server *Server) systemSettingsMaintenance(context fiber.Ctx) error {
 	if context.Method() == fiber.MethodPost {
 		var req struct {
-			IsDown bool   `json:"is_down"`
-			Secret string `json:"secret"`
-			Notice string `json:"notice"`
+			IsDown bool     `json:"is_down"`
+			Secret string   `json:"secret"`
+			Notice string   `json:"notice"`
+			Exempt []string `json:"exempt_ips"`
 		}
-		_ = context.Bind().Body(&req)
+		if err := context.Bind().Body(&req); err != nil {
+			return context.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Invalid request body."})
+		}
+
+		secret := strings.TrimSpace(req.Secret)
+		if secret == "" {
+			secret = "whiteinfo-admin-bypass"
+		}
+		notice := strings.TrimSpace(req.Notice)
+		if notice == "" {
+			notice = "System is currently undergoing scheduled platform upgrades."
+		}
+		if req.Exempt == nil {
+			req.Exempt = []string{}
+		}
+
+		if err := server.putSetting("system", "maintenance_is_down", req.IsDown); err != nil {
+			return databaseError(context, err)
+		}
+		if err := server.putSetting("system", "maintenance_secret", secret); err != nil {
+			return databaseError(context, err)
+		}
+		if err := server.putSetting("system", "maintenance_notice", notice); err != nil {
+			return databaseError(context, err)
+		}
+		if err := server.putSetting("system", "maintenance_exempt_ips", req.Exempt); err != nil {
+			return databaseError(context, err)
+		}
 
 		return context.JSON(fiber.Map{
-			"message": "Maintenance mode toggled successfully.",
+			"message": "Maintenance mode updated successfully.",
 			"data": fiber.Map{
-				"is_down": req.IsDown,
-				"secret":  "whiteinfo-admin-bypass",
+				"is_down":        req.IsDown,
+				"secret":         secret,
+				"notice_message": notice,
+				"exempt_ips":     req.Exempt,
 			},
 		})
+	}
+
+	isDown := false
+	if value, ok := server.settingValue("system", "maintenance_is_down").(bool); ok {
+		isDown = value
+	}
+	secret := "whiteinfo-admin-bypass"
+	if value, ok := server.settingValue("system", "maintenance_secret").(string); ok && strings.TrimSpace(value) != "" {
+		secret = value
+	}
+	notice := "System is currently undergoing scheduled platform upgrades."
+	if value, ok := server.settingValue("system", "maintenance_notice").(string); ok && strings.TrimSpace(value) != "" {
+		notice = value
+	}
+	exempt := []string{}
+	if value, ok := server.settingValue("system", "maintenance_exempt_ips").([]any); ok {
+		for _, item := range value {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				exempt = append(exempt, text)
+			}
+		}
 	}
 
 	return context.JSON(fiber.Map{
 		"data": fiber.Map{
-			"is_down":        false,
-			"secret":         "whiteinfo-admin-bypass",
-			"notice_message": "System is currently undergoing scheduled platform upgrades.",
-			"exempt_ips":     []string{"127.0.0.1", "103.145.118.0/24"},
+			"is_down":        isDown,
+			"secret":         secret,
+			"notice_message": notice,
+			"exempt_ips":     exempt,
 		},
 	})
 }
 
+func backupDirectory() string {
+	if path := strings.TrimSpace(os.Getenv("BACKUP_PATH")); path != "" {
+		return path
+	}
+
+	return filepath.Join("storage", "backups")
+}
+
+func (server *Server) downloadDatabaseBackup(context fiber.Ctx) error {
+	filename := filepath.Base(context.Params("filename"))
+	if !strings.HasSuffix(strings.ToLower(filename), ".sql.gz") {
+		return context.Status(fiber.StatusNotFound).JSON(fiber.Map{"message": "Backup file not found."})
+	}
+
+	fullPath := filepath.Join(backupDirectory(), filename)
+	if info, err := os.Stat(fullPath); err != nil || info.IsDir() {
+		return context.Status(fiber.StatusNotFound).JSON(fiber.Map{"message": "Backup file not found."})
+	}
+
+	return context.Download(fullPath, filename)
+}
+
 func (server *Server) systemSettingsBackups(context fiber.Ctx) error {
+	dir := backupDirectory()
+
 	if context.Method() == fiber.MethodPost {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return context.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Unable to prepare the backup directory: " + err.Error()})
+		}
+
+		dumpBinary := strings.TrimSpace(os.Getenv("MYSQLDUMP_PATH"))
+		if dumpBinary == "" {
+			dumpBinary = "mysqldump"
+		}
+		if _, err := exec.LookPath(dumpBinary); err != nil {
+			return context.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"message": "Database backups are unavailable: mysqldump is not installed or not on PATH on this server.",
+			})
+		}
+
+		dbConfig := server.config.Database
+		filename := "sms_panel_manual_" + time.Now().Format("20060102_150405") + ".sql.gz"
+		fullPath := filepath.Join(dir, filename)
+
+		host := dbConfig.Addr
+		port := "3306"
+		if parsedHost, parsedPort, err := net.SplitHostPort(dbConfig.Addr); err == nil {
+			host = parsedHost
+			port = parsedPort
+		}
+
+		args := []string{
+			"--host=" + host,
+			"--port=" + port,
+			"--user=" + dbConfig.User,
+			"--single-transaction",
+			"--quick",
+			"--skip-lock-tables",
+			"--no-tablespaces",
+			dbConfig.DBName,
+		}
+
+		cmd := exec.Command(dumpBinary, args...)
+		cmd.Env = append(os.Environ(), "MYSQL_PWD="+dbConfig.Passwd)
+
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return context.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Unable to start the database dump: " + err.Error()})
+		}
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+
+		file, err := os.Create(fullPath)
+		if err != nil {
+			return context.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Unable to create the backup file: " + err.Error()})
+		}
+		gzipWriter := gzip.NewWriter(file)
+
+		if err := cmd.Start(); err != nil {
+			_ = file.Close()
+			_ = os.Remove(fullPath)
+			return context.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"message": "Unable to start mysqldump: " + err.Error()})
+		}
+
+		_, copyErr := io.Copy(gzipWriter, stdout)
+		closeErr := gzipWriter.Close()
+		fileErr := file.Close()
+		waitErr := cmd.Wait()
+		if copyErr != nil || closeErr != nil || fileErr != nil || waitErr != nil {
+			_ = os.Remove(fullPath)
+			message := strings.TrimSpace(stderr.String())
+			if message == "" && waitErr != nil {
+				message = waitErr.Error()
+			}
+			if message == "" {
+				message = "The database dump did not complete successfully."
+			}
+
+			return context.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Backup failed: " + message})
+		}
+
+		info, err := os.Stat(fullPath)
+		if err != nil {
+			return context.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Backup file could not be verified: " + err.Error()})
+		}
+
 		return context.JSON(fiber.Map{
-			"message": "Manual database backup snapshot initiated successfully.",
+			"message": "Manual database backup snapshot created successfully.",
 			"backup": fiber.Map{
-				"filename":   "sms_panel_snapshot_" + time.Now().Format("20060102_150405") + ".sql.gz",
-				"size_mb":    48.2,
+				"id":         1,
+				"filename":   filename,
+				"size_mb":    float64(info.Size()) / (1024 * 1024),
+				"driver":     "Local",
 				"status":     "completed",
-				"created_at": time.Now().Format(time.RFC3339),
+				"created_at": info.ModTime().Format(time.RFC3339),
 			},
 		})
 	}
 
-	backups := []fiber.Map{
-		{
-			"id":         1,
-			"filename":   "sms_panel_auto_2026-10-28_020000.sql.gz",
-			"size_mb":    47.8,
-			"driver":     "Local + FTP Offsite",
-			"status":     "verified",
-			"created_at": "2026-10-28T02:00:00Z",
-		},
-		{
-			"id":         2,
-			"filename":   "sms_panel_auto_2026-10-27_020000.sql.gz",
-			"size_mb":    46.9,
-			"driver":     "Local + FTP Offsite",
-			"status":     "verified",
-			"created_at": "2026-10-27T02:00:00Z",
-		},
-		{
-			"id":         3,
-			"filename":   "sms_panel_auto_2026-10-26_020000.sql.gz",
-			"size_mb":    45.5,
-			"driver":     "Local + FTP Offsite",
-			"status":     "verified",
-			"created_at": "2026-10-26T02:00:00Z",
-		},
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		return context.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Unable to read the backup directory: " + err.Error()})
+	}
+
+	type backupFile struct {
+		name    string
+		size    int64
+		modTime time.Time
+	}
+	files := []backupFile{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".sql.gz") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, backupFile{name: entry.Name(), size: info.Size(), modTime: info.ModTime()})
+	}
+
+	sort.Slice(files, func(i, j int) bool { return files[i].modTime.After(files[j].modTime) })
+
+	backups := make([]fiber.Map, 0, len(files))
+	for index, file := range files {
+		backups = append(backups, fiber.Map{
+			"id":         index + 1,
+			"filename":   file.name,
+			"size_mb":    float64(file.size) / (1024 * 1024),
+			"driver":     "Local",
+			"status":     "completed",
+			"created_at": file.modTime.Format(time.RFC3339),
+		})
 	}
 
 	return context.JSON(fiber.Map{
 		"data": backups,
 		"config": fiber.Map{
-			"auto_backup_enabled":   true,
-			"auto_backup_frequency": "daily",
-			"auto_backup_time":      "02:00",
-			"keep_local_backups":    7,
-			"ftp_enabled":           false,
-			"gdrive_enabled":        false,
+			"backup_directory":    dir,
+			"auto_backup_enabled": false,
 		},
 	})
 }
@@ -706,13 +923,25 @@ func (server *Server) securityDashboard(context fiber.Ctx) error {
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM users WHERE api_access = 1 AND deleted_at IS NULL").Scan(&apiUsers)
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM ip_whitelist_requests WHERE status = 'pending'").Scan(&pendingIps)
 
+	var blocked24h int
+	_ = server.db.QueryRow(`
+		SELECT COUNT(*) FROM ip_whitelist_audit_logs
+		WHERE action IN ('rejected', 'revoked', 'disabled')
+		  AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+	`).Scan(&blocked24h)
+
+	firewallRule := "IP whitelist not enforced"
+	if enforced, ok := server.settingValue("security", "ip_whitelist_enforced").(bool); ok && enforced {
+		firewallRule = "IP whitelist enforced"
+	}
+
 	return context.JSON(fiber.Map{
 		"data": fiber.Map{
 			"total_users":          totalUsers,
 			"api_users":            apiUsers,
 			"pending_ip_requests":  pendingIps,
-			"active_firewall_rule": "Strict ASN + IP Filtering",
-			"blocked_attacks_24h":  14,
+			"active_firewall_rule": firewallRule,
+			"blocked_attacks_24h":  blocked24h,
 		},
 	})
 }
@@ -728,28 +957,28 @@ func (server *Server) securityFraudRules(context fiber.Ctx) error {
 
 	rules := []fiber.Map{
 		{
-			"id":          1,
-			"name":        "Maximum Velocity Limit",
-			"type":        "rate_limit",
-			"threshold":   "500 SMS / minute per customer",
-			"action":      "Queue & Alert",
-			"is_active":   true,
+			"id":        1,
+			"name":      "Maximum Velocity Limit",
+			"type":      "rate_limit",
+			"threshold": "500 SMS / minute per customer",
+			"action":    "Queue & Alert",
+			"is_active": true,
 		},
 		{
-			"id":          2,
-			"name":        "Gambling & Lottery Blacklist",
-			"type":        "keyword_filter",
-			"threshold":   "casino, bet, lottery, win big, prize",
-			"action":      "Auto Reject",
-			"is_active":   true,
+			"id":        2,
+			"name":      "Gambling & Lottery Blacklist",
+			"type":      "keyword_filter",
+			"threshold": "casino, bet, lottery, win big, prize",
+			"action":    "Auto Reject",
+			"is_active": true,
 		},
 		{
-			"id":          3,
-			"name":        "Otp High-Frequency Burst Block",
-			"type":        "destination_burst",
-			"threshold":   "Max 5 OTPs per destination MSISDN per hour",
-			"action":      "Block 1 Hour",
-			"is_active":   true,
+			"id":        3,
+			"name":      "Otp High-Frequency Burst Block",
+			"type":      "destination_burst",
+			"threshold": "Max 5 OTPs per destination MSISDN per hour",
+			"action":    "Block 1 Hour",
+			"is_active": true,
 		},
 	}
 
@@ -954,10 +1183,16 @@ func (server *Server) monitoringTps(context fiber.Ctx) error {
 		}
 	}
 
-	peakToday := currentTps * 2
-	if peakToday < 10 {
-		peakToday = 10
-	}
+	var peakPerMinute int
+	_ = server.db.QueryRow(`
+		SELECT COALESCE(MAX(per_minute), 0) FROM (
+			SELECT COUNT(*) AS per_minute
+			FROM messages
+			WHERE created_at >= CURDATE()
+			GROUP BY DATE_FORMAT(created_at, '%Y-%m-%d %H:%i')
+		) AS minute_counts
+	`).Scan(&peakPerMinute)
+	peakToday := peakPerMinute / 60
 
 	return context.JSON(fiber.Map{
 		"data": fiber.Map{
@@ -986,17 +1221,17 @@ func (server *Server) routingRules(context fiber.Ctx) error {
 	defer rows.Close()
 
 	type routePlanItem struct {
-		ID               int64   `json:"id"`
-		Name             string  `json:"name"`
-		Code             string  `json:"code"`
-		TrafficType      string  `json:"traffic_type"`
-		FailoverStrategy string  `json:"failover_strategy"`
-		IsDefault        bool    `json:"is_default"`
-		IsEnabled        bool    `json:"is_enabled"`
-		Description      string  `json:"description"`
-		PriorityChain    string  `json:"priority_chain"`
-		GatewaysSummary  string  `json:"gateways_summary"`
-		CreatedAt        string  `json:"created_at"`
+		ID               int64  `json:"id"`
+		Name             string `json:"name"`
+		Code             string `json:"code"`
+		TrafficType      string `json:"traffic_type"`
+		FailoverStrategy string `json:"failover_strategy"`
+		IsDefault        bool   `json:"is_default"`
+		IsEnabled        bool   `json:"is_enabled"`
+		Description      string `json:"description"`
+		PriorityChain    string `json:"priority_chain"`
+		GatewaysSummary  string `json:"gateways_summary"`
+		CreatedAt        string `json:"created_at"`
 	}
 
 	plans := make([]routePlanItem, 0)

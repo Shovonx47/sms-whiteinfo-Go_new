@@ -14,8 +14,6 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"golang.org/x/crypto/bcrypt"
-
-	"smswhiteinfo/customer-api/internal/validation"
 )
 
 type loginRequest struct {
@@ -25,23 +23,34 @@ type loginRequest struct {
 }
 
 type registerRequest struct {
-	Name        string `json:"name"`
-	Email       string `json:"email"`
-	Phone       string `json:"phone"`
-	Password    string `json:"password"`
-	PlanSlug    string `json:"plan_slug"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Phone    string `json:"phone"`
+	Password string `json:"password"`
+	PlanSlug string `json:"plan_slug"`
 }
 
 type customerUser struct {
-	ID         int64   `json:"id"`
-	Name       string  `json:"name"`
-	Email      string  `json:"email"`
-	Phone      *string `json:"phone"`
-	Balance    string  `json:"balance"`
-	Status     string  `json:"status"`
-	KycStatus  string  `json:"kyc_status"`
-	SpID       *int64  `json:"sp_id"`
-	CreatedAt  string  `json:"created_at"`
+	ID                 int64   `json:"id"`
+	Name               string  `json:"name"`
+	Email              string  `json:"email"`
+	Phone              *string `json:"phone"`
+	Balance            string  `json:"balance"`
+	Status             string  `json:"status"`
+	KycStatus          string  `json:"kyc_status"`
+	SpID               *int64  `json:"sp_id"`
+	CreatedAt          string  `json:"created_at"`
+	FrontNID           *string `json:"front_nid"`
+	NidNumber          *string `json:"nid_number"`
+	LivePhoto          *string `json:"live_photo"`
+	TradeLicenseNumber *string `json:"trade_license_number"`
+	TradeLicenseFile   *string `json:"trade_license_file"`
+	CreatedByAdmin     bool    `json:"created_by_admin"`
+	CreatedBySP        bool    `json:"created_by_sp"`
+	SmsAutoApproved    bool    `json:"sms_auto_approved"`
+	APIAccess          bool    `json:"api_access"`
+	KycResubmitFields  *string `json:"kyc_resubmit_fields"`
+	KycRejectedReason  *string `json:"kyc_rejected_reason"`
 }
 
 func (server *Server) login(context fiber.Ctx) error {
@@ -160,171 +169,20 @@ func (server *Server) login(context fiber.Ctx) error {
 	})
 }
 
-func (server *Server) register(context fiber.Ctx) error {
-	request := registerRequest{}
-	if err := json.Unmarshal(context.Body(), &request); err != nil {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "The supplied data is invalid."})
-	}
-
-	request.Name = strings.TrimSpace(request.Name)
-	request.Email = strings.TrimSpace(strings.ToLower(request.Email))
-	request.Phone = strings.TrimSpace(request.Phone)
-
-	// Basic validation
-	errors := fiber.Map{}
-	if request.Name == "" {
-		errors["name"] = []string{"Name is required."}
-	}
-	if request.Email == "" || !isValidEmail(request.Email) {
-		errors["email"] = []string{"A valid email is required."}
-	}
-	if len(request.Password) < 8 {
-		errors["password"] = []string{"Password must be at least 8 characters."}
-	}
-	if len(errors) > 0 {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Validation failed.", "errors": errors})
-	}
-
-	// Reject disposable email domains (exact Laravel parity: storage/framework/disposable_domains.json)
-	if validation.IsDisposable(request.Email) {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"message": "Validation failed.",
-			"errors":  fiber.Map{"email": []string{"The email domain is not allowed. Please use a permanent email address."}},
-		})
-	}
-
-	// Duplicate email check
-	var existing int64
-	_ = server.db.QueryRow("SELECT id FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1", request.Email).Scan(&existing)
-	if existing > 0 {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"message": "Validation failed.",
-			"errors":  fiber.Map{"email": []string{"This email address has already been registered."}},
-		})
-	}
-
-	// Duplicate phone check
-	if request.Phone != "" {
-		var existingPhone int64
-		_ = server.db.QueryRow("SELECT id FROM users WHERE phone = ? AND deleted_at IS NULL LIMIT 1", request.Phone).Scan(&existingPhone)
-		if existingPhone > 0 {
-			return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-				"message": "Validation failed.",
-				"errors":  fiber.Map{"phone": []string{"This mobile number is already registered."}},
-			})
-		}
-	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
-	if err != nil {
-		return context.Status(http.StatusInternalServerError).JSON(fiber.Map{"message": "Unable to create account."})
-	}
-
-	// Resolve tariff plan if a slug was given
-	var tariffPlanID *int64
-	if request.PlanSlug != "" {
-		var planID int64
-		err := server.db.QueryRow(
-			"SELECT id FROM tariff_plans WHERE slug = ? AND status = 'active' LIMIT 1",
-			request.PlanSlug,
-		).Scan(&planID)
-		if err == nil {
-			tariffPlanID = &planID
-		}
-	}
-
-	now := time.Now()
-	result, err := server.db.Exec(`
-		INSERT INTO users (name, email, phone, password, type, status, kyc_status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, 'customer', 'pending', 'pending', ?, ?)
-	`, request.Name, request.Email, nullString(request.Phone), string(hash), now, now)
-	if err != nil {
-		return databaseError(context, err)
-	}
-
-	userID, _ := result.LastInsertId()
-
-	if tariffPlanID != nil {
-		_, _ = server.db.Exec(`
-			INSERT INTO tariff_plan_assignments (user_id, tariff_plan_id, effective_from, status, created_at, updated_at)
-			VALUES (?, ?, NOW(), 'active', NOW(), NOW())
-		`, userID, *tariffPlanID)
-	}
-
-	ttl := server.config.TokenTTL
-	token, err := server.tokens.Issue(userID, request.Name, request.Email, time.Now().Add(ttl))
-	if err != nil {
-		return context.Status(http.StatusInternalServerError).JSON(fiber.Map{"message": "Account created but unable to sign in."})
-	}
-
-	user := customerUser{
-		ID:        userID,
-		Name:      request.Name,
-		Email:     request.Email,
-		Balance:   "0.00",
-		Status:    "pending",
-		KycStatus: "pending",
-		CreatedAt: now.Format(time.RFC3339),
-	}
-	if request.Phone != "" {
-		user.Phone = &request.Phone
-	}
-
-	context.Cookie(&fiber.Cookie{
-		Name:     "customer_token",
-		Value:    token,
-		Expires:  time.Now().Add(ttl),
-		HTTPOnly: false,
-		SameSite: "Lax",
-		Path:     "/",
-	})
-
-	return context.Status(http.StatusCreated).JSON(fiber.Map{
-		"message": "Account created. Your KYC is under review.",
-		"token":   token,
-		"data": fiber.Map{
-			"token": token,
-			"user":  user,
-		},
-	})
-}
-
 func (server *Server) registerPlan(context fiber.Ctx) error {
-	slug := context.Params("slug")
-
-	var planID int64
-	var name string
-	err := server.db.QueryRow(
-		"SELECT id, name FROM tariff_plans WHERE slug = ? AND status = 'active' LIMIT 1",
-		slug,
-	).Scan(&planID, &name)
-	if err == sql.ErrNoRows {
-		// Check alias in signup_slug_aliases
-		var canonicalSlug string
-		err2 := server.db.QueryRow(
-			"SELECT tp.slug, tp.name FROM signup_slug_aliases ssa JOIN tariff_plans tp ON tp.id = ssa.tariff_plan_id WHERE ssa.slug = ? LIMIT 1",
-			slug,
-		).Scan(&canonicalSlug, &name)
-		if err2 != nil {
-			return context.Status(http.StatusGone).JSON(fiber.Map{"message": "This signup link is no longer active."})
-		}
-		return context.JSON(fiber.Map{
-			"data": fiber.Map{
-				"slug":     canonicalSlug,
-				"name":     name,
-				"is_alias": true,
-			},
-		})
-	}
+	plan, err := server.resolveSignupPlan(context.Params("slug"))
 	if err != nil {
 		return databaseError(context, err)
+	}
+	if plan == nil {
+		return context.Status(http.StatusGone).JSON(fiber.Map{"message": "This signup link is no longer active."})
 	}
 
 	return context.JSON(fiber.Map{
 		"data": fiber.Map{
-			"slug":     slug,
-			"name":     name,
-			"is_alias": false,
+			"slug":     plan.CanonicalSlug,
+			"name":     plan.Name,
+			"is_alias": plan.IsAlias,
 		},
 	})
 }
@@ -546,12 +404,18 @@ func (server *Server) loadUser(userID int64) (*customerUser, error) {
 	u := &customerUser{}
 	var createdAt time.Time
 	err := server.db.QueryRow(`
-		SELECT id, name, email, phone, balance, status, kyc_status, sp_id, created_at
+		SELECT id, name, email, phone, balance, status, kyc_status, sp_id, created_at,
+		       front_nid, nid_number, live_photo, trade_license_number, trade_license_file,
+		       created_by_admin, created_by_sp, COALESCE(sms_auto_approved, 1), COALESCE(api_access, 0),
+		       kyc_resubmit_fields, kyc_rejected_reason
 		FROM users
 		WHERE id = ? AND deleted_at IS NULL
 	`, userID).Scan(
 		&u.ID, &u.Name, &u.Email, &u.Phone,
 		&u.Balance, &u.Status, &u.KycStatus, &u.SpID, &createdAt,
+		&u.FrontNID, &u.NidNumber, &u.LivePhoto, &u.TradeLicenseNumber, &u.TradeLicenseFile,
+		&u.CreatedByAdmin, &u.CreatedBySP, &u.SmsAutoApproved, &u.APIAccess,
+		&u.KycResubmitFields, &u.KycRejectedReason,
 	)
 	if err != nil {
 		return nil, err
@@ -576,5 +440,3 @@ func isValidEmail(email string) bool {
 
 	return re.MatchString(email)
 }
-
-

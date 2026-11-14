@@ -84,6 +84,43 @@ export const api = {
 	put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
 	patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
 	delete: <T>(path: string) => request<T>('DELETE', path),
+	async download(path: string): Promise<Blob> {
+		const res = await fetch(`${BASE_URL}${path}`, {
+			headers: { ...authorizationHeader() },
+			credentials: 'include'
+		});
+		if (!res.ok) {
+			let data: Record<string, unknown> = {};
+			try {
+				data = await res.json();
+			} catch {
+				// ignore parse errors
+			}
+			throw new ApiError(res.status, data);
+		}
+		return res.blob();
+	},
+	async upload<T>(path: string, body: FormData): Promise<T> {
+		const res = await fetch(`${BASE_URL}${path}`, {
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				...authorizationHeader()
+			},
+			credentials: 'include',
+			body
+		});
+		let data: Record<string, unknown> = {};
+		try {
+			data = await res.json();
+		} catch {
+			// ignore parse errors
+		}
+		if (!res.ok) {
+			throw new ApiError(res.status, data);
+		}
+		return data as T;
+	},
 	getToken(): string | null {
 		return storedToken();
 	},

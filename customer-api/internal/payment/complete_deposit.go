@@ -5,9 +5,18 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 
 	"smswhiteinfo/customer-api/internal/billing"
 )
+
+func notifyDeposit(ctx context.Context, tx *sql.Tx, userID int64, title, body, status string) {
+	payload, _ := json.Marshal(map[string]any{"title": title, "body": body, "status": status})
+	_, _ = tx.ExecContext(ctx, `
+		INSERT INTO notifications (id, type, notifiable_type, notifiable_id, data, read_at, created_at, updated_at)
+		VALUES (?, ?, 'App\\Models\\User', ?, ?, NULL, NOW(), NOW())
+	`, uuid.NewString(), "App\\Notifications\\DashboardNotification", userID, string(payload))
+}
 
 // CompleteDeposit performs the atomic verification, state transition, SP balance debit, and customer credit inside a single DB transaction.
 func CompleteDeposit(ctx context.Context, db *sql.DB, gateway, transactionID string, isSuccess bool, rawMeta map[string]any) (bool, error) {
@@ -80,6 +89,11 @@ func CompleteDeposit(ctx context.Context, db *sql.DB, gateway, transactionID str
 		return false, fmt.Errorf("failed to credit customer: %w", cErr)
 	}
 
+	notifyDeposit(ctx, tx, userID, "Deposit Completed", fmt.Sprintf("Your deposit of %.2f has been completed.", amount), "success")
+	if userType == "customer" && spID.Valid && spID.Int64 > 0 {
+		notifyDeposit(ctx, tx, spID.Int64, "Customer Top-up", fmt.Sprintf("Customer %s topped up %.2f BDT. Deducted from your balance.", userName, amount), "info")
+	}
+
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
@@ -145,6 +159,11 @@ func CompleteManualDeposit(ctx context.Context, db *sql.DB, depositID int64, adm
 	_, cErr := billing.CreditBalance(ctx, tx, userID, amount, "deposit", depositID, creditDesc)
 	if cErr != nil {
 		return false, fmt.Errorf("failed to credit customer: %w", cErr)
+	}
+
+	notifyDeposit(ctx, tx, userID, "Deposit Completed", fmt.Sprintf("Your deposit of %.2f has been completed.", amount), "success")
+	if userType == "customer" && spID.Valid && spID.Int64 > 0 {
+		notifyDeposit(ctx, tx, spID.Int64, "Customer Top-up", fmt.Sprintf("Customer %s topped up %.2f BDT. Deducted from your balance.", userName, amount), "info")
 	}
 
 	if err := tx.Commit(); err != nil {

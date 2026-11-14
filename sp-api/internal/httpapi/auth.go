@@ -108,17 +108,27 @@ func (server *Server) logout(ctx fiber.Ctx) error {
 }
 
 func (server *Server) me(ctx fiber.Ctx) error {
-	claims := sp(ctx)
+	userID, _ := ctx.Locals("sp_user_id").(int64)
+	if userID == 0 {
+		userID = sp(ctx).SPID
+	}
 
 	var user spUser
 	err := server.db.QueryRow(`
 		SELECT id, name, email, COALESCE(phone, ''), balance, type, status
 		FROM users
 		WHERE id = ? AND type = 'sp' AND deleted_at IS NULL
-	`, claims.SPID).Scan(&user.ID, &user.Name, &user.Email, &user.Phone, &user.Balance, &user.Type, &user.Status)
+	`, userID).Scan(&user.ID, &user.Name, &user.Email, &user.Phone, &user.Balance, &user.Type, &user.Status)
 	if err != nil {
 		return databaseError(ctx, err)
 	}
 
-	return ctx.JSON(fiber.Map{"data": user})
+	permissions, _ := ctx.Locals("sp_permissions").(map[string]bool)
+	isOwner, _ := ctx.Locals("sp_is_owner").(bool)
+	granted := make([]string, 0, len(permissions))
+	for permission := range permissions {
+		granted = append(granted, permission)
+	}
+
+	return ctx.JSON(fiber.Map{"data": user, "is_owner": isOwner, "permissions": granted})
 }

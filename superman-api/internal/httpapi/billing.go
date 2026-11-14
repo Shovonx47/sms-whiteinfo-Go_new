@@ -488,18 +488,18 @@ func (server *Server) adjustBalance(context fiber.Ctx) error {
 // --- Tariff Plans Full CRUD ---
 
 type TariffPlanFullItem struct {
-	ID                 int64                 `json:"id"`
-	Name               string                `json:"name"`
-	Slug               string                `json:"slug"`
-	Type               string                `json:"type"`
-	Status             string                `json:"status"`
-	Currency           string                `json:"currency"`
-	Description        *string               `json:"description"`
-	RatesCount         int                   `json:"rates_count"`
-	AssignedUsersCount int                   `json:"assigned_users_count"`
-	Rates              []TariffRateWithOper  `json:"rates,omitempty"`
-	CreatedAt          string                `json:"created_at"`
-	UpdatedAt          string                `json:"updated_at"`
+	ID                 int64                `json:"id"`
+	Name               string               `json:"name"`
+	Slug               string               `json:"slug"`
+	Type               string               `json:"type"`
+	Status             string               `json:"status"`
+	Currency           string               `json:"currency"`
+	Description        *string              `json:"description"`
+	RatesCount         int                  `json:"rates_count"`
+	AssignedUsersCount int                  `json:"assigned_users_count"`
+	Rates              []TariffRateWithOper `json:"rates,omitempty"`
+	CreatedAt          string               `json:"created_at"`
+	UpdatedAt          string               `json:"updated_at"`
 }
 
 type TariffRateWithOper struct {
@@ -601,13 +601,13 @@ func (server *Server) billingTariffPlanDetail(context fiber.Ctx) error {
 }
 
 type SaveTariffPlanRequest struct {
-	Name        string                    `json:"name"`
-	Slug        string                    `json:"slug"`
-	Type        string                    `json:"type"`
-	Status      string                    `json:"status"`
-	Currency    string                    `json:"currency"`
-	Description *string                   `json:"description"`
-	Rates       []SaveTariffRateInput     `json:"rates"`
+	Name        string                `json:"name"`
+	Slug        string                `json:"slug"`
+	Type        string                `json:"type"`
+	Status      string                `json:"status"`
+	Currency    string                `json:"currency"`
+	Description *string               `json:"description"`
+	Rates       []SaveTariffRateInput `json:"rates"`
 }
 
 type SaveTariffRateInput struct {

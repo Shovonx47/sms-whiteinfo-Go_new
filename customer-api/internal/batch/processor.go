@@ -13,11 +13,34 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
 	"smswhiteinfo/customer-api/internal/billing"
 )
 
 var bdPhoneRegex = regexp.MustCompile(`^(?:\+?88)?0?(1[3-9]\d{8})$`)
+
+// notifyCustomer writes a Filament-compatible database notification.
+func (p *BatchProcessor) notifyCustomer(userID int64, title, body, status, url string) {
+	if userID <= 0 {
+		return
+	}
+
+	payload := map[string]any{"title": title, "body": body, "status": status}
+	if url != "" {
+		payload["actions"] = []map[string]any{{"label": "View", "url": url}}
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+
+	now := time.Now()
+	_, _ = p.db.Exec(`
+		INSERT INTO notifications (id, type, notifiable_type, notifiable_id, data, read_at, created_at, updated_at)
+		VALUES (?, ?, 'App\\Models\\User', ?, ?, NULL, ?, ?)
+	`, uuid.NewString(), "App\\Notifications\\DashboardNotification", userID, string(encoded), now, now)
+}
 
 func FormatByRegex(raw string) (string, bool) {
 	digits := regexp.MustCompile(`\D+`).ReplaceAllString(raw, "")
@@ -91,6 +114,7 @@ func (p *BatchProcessor) ProcessBatch(ctx context.Context, batchID int64) error 
 
 	if !senderID.Valid {
 		_, _ = p.db.ExecContext(ctx, "UPDATE batches SET status = 'failed', updated_at = NOW() WHERE id = ?", batchID)
+		p.notifyCustomer(userID, "Batch failed: sender missing", "This batch has no sender selected. Pricing depends on the sender type, so we cannot process it.", "danger", "")
 		return fmt.Errorf("batch %d has no sender_id", batchID)
 	}
 
@@ -105,10 +129,12 @@ func (p *BatchProcessor) ProcessBatch(ctx context.Context, batchID int64) error 
 	`, senderID.Int64).Scan(&senderLabel, &senderType, &gatewayID)
 	if err != nil {
 		_, _ = p.db.ExecContext(ctx, "UPDATE batches SET status = 'failed', updated_at = NOW() WHERE id = ?", batchID)
+		p.notifyCustomer(userID, "Batch failed: sender missing", "The selected sender no longer exists, so this batch cannot be processed.", "danger", "")
 		return fmt.Errorf("sender not found for batch %d: %w", batchID, err)
 	}
 
-	isMasking := strings.Contains(strings.ToLower(senderType), "masking")
+	normSenderType := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(senderType)), "_", "-")
+	isMasking := normSenderType != "numeric" && normSenderType != "non-masking" && normSenderType != "number" && normSenderType != ""
 
 	rateResolver, err := billing.ForUser(ctx, p.db, userID)
 	if err != nil {
@@ -149,7 +175,7 @@ func (p *BatchProcessor) ProcessBatch(ctx context.Context, batchID int64) error 
 	seenPhones := make(map[string]bool)
 
 	// Fetch recipients stream
-	recipients, err := p.extractRecipients(ctx, sourceType, sourceConfig, lastCursor)
+	recipients, err := p.extractRecipients(ctx, userID, sourceType, sourceConfig, lastCursor)
 	if err != nil {
 		_, _ = p.db.ExecContext(ctx, "UPDATE batches SET status = 'failed', updated_at = NOW() WHERE id = ?", batchID)
 		return err
@@ -338,7 +364,8 @@ func (p *BatchProcessor) ProcessBatch(ctx context.Context, batchID int64) error 
 					UPDATE batches 
 					SET status = 'failed', failed_report_path = ?, updated_at = NOW() 
 					WHERE id = ?
-				`, reportFilePath, batchID)
+				`, relReportPath, batchID)
+				p.notifyCustomer(userID, "Message batch processing failed", err.Error(), "danger", "")
 				return err
 			}
 		}
@@ -351,6 +378,7 @@ func (p *BatchProcessor) ProcessBatch(ctx context.Context, batchID int64) error 
 				SET status = 'failed', failed_report_path = ?, updated_at = NOW() 
 				WHERE id = ?
 			`, relReportPath, batchID)
+			p.notifyCustomer(userID, "Message batch processing failed", err.Error(), "danger", "")
 			return err
 		}
 	}
@@ -367,10 +395,26 @@ func (p *BatchProcessor) ProcessBatch(ctx context.Context, batchID int64) error 
 		WHERE id = ?
 	`, savedReportPath, batchID)
 
+	unit := "messages"
+	if validCount == 1 {
+		unit = "message"
+	}
+	notificationBody := "All recipients were processed successfully."
+	if invalidCount > 0 {
+		notificationBody = fmt.Sprintf("%d recipient(s) were skipped. Download the report for details.", invalidCount)
+	}
+	notificationStatus := "success"
+	notificationURL := ""
+	if invalidCount > 0 {
+		notificationStatus = "warning"
+		notificationURL = "/customer/batches"
+	}
+	p.notifyCustomer(userID, fmt.Sprintf("Batch processed: %d %s ready to send", validCount, unit), notificationBody, notificationStatus, notificationURL)
+
 	return nil
 }
 
-func (p *BatchProcessor) extractRecipients(ctx context.Context, sourceType string, config map[string]any, lastCursor sql.NullInt64) ([]RecipientItem, error) {
+func (p *BatchProcessor) extractRecipients(ctx context.Context, userID int64, sourceType string, config map[string]any, lastCursor sql.NullInt64) ([]RecipientItem, error) {
 	var items []RecipientItem
 	startCursor := int64(0)
 	if lastCursor.Valid {
@@ -378,7 +422,7 @@ func (p *BatchProcessor) extractRecipients(ctx context.Context, sourceType strin
 	}
 
 	switch sourceType {
-	case "manual", "api":
+	case "manual", "api", "quick":
 		recRaw, ok := config["recipients"].([]any)
 		if !ok {
 			return nil, nil
@@ -396,7 +440,9 @@ func (p *BatchProcessor) extractRecipients(ctx context.Context, sourceType strin
 			vals := make(map[string]string)
 			if vm, ok := rm["values"].(map[string]any); ok {
 				for k, v := range vm {
-					vals[k] = fmt.Sprintf("%v", v)
+					if v != nil {
+						vals[k] = fmt.Sprintf("%v", v)
+					}
 				}
 			}
 			items = append(items, RecipientItem{
@@ -419,6 +465,8 @@ func (p *BatchProcessor) extractRecipients(ctx context.Context, sourceType strin
 				groupIDs = append(groupIDs, int64(v))
 			case int64:
 				groupIDs = append(groupIDs, v)
+			case int:
+				groupIDs = append(groupIDs, int64(v))
 			}
 		}
 
@@ -429,17 +477,18 @@ func (p *BatchProcessor) extractRecipients(ctx context.Context, sourceType strin
 		inParams := strings.Repeat("?,", len(groupIDs))
 		inParams = strings.TrimSuffix(inParams, ",")
 
-		args := make([]any, len(groupIDs)+1)
-		for i, id := range groupIDs {
-			args[i] = id
+		args := make([]any, 0, len(groupIDs)+2)
+		args = append(args, userID)
+		for _, id := range groupIDs {
+			args = append(args, id)
 		}
-		args[len(groupIDs)] = startCursor
+		args = append(args, startCursor)
 
 		q := fmt.Sprintf(`
 			SELECT DISTINCT c.id, c.phone, COALESCE(c.name, '')
 			FROM contacts c
 			JOIN contact_group cg ON cg.contact_id = c.id
-			WHERE cg.group_id IN (%s) AND c.deleted_at IS NULL AND c.id > ?
+			WHERE c.user_id = ? AND cg.group_id IN (%s) AND c.deleted_at IS NULL AND c.id > ?
 			ORDER BY c.id ASC
 		`, inParams)
 
@@ -483,6 +532,104 @@ func (p *BatchProcessor) extractRecipients(ctx context.Context, sourceType strin
 	return items, nil
 }
 
+func resolveUploadHeaderMapping(rawFirstRow []string, config map[string]any) (headers []string, hasHeaderRow bool, mapping map[string]any, phoneIdx int, varIndices map[string]int) {
+	mapping, _ = config["mapping"].(map[string]any)
+
+	// Determine whether row 0 is a header row (either explicit mapping flag or heuristic).
+	hasHeaderRow = true
+	if v, exists := config["has_header_row"]; exists {
+		if b, ok := v.(bool); ok {
+			hasHeaderRow = b
+		}
+	}
+
+	if hasHeaderRow {
+		headers = make([]string, len(rawFirstRow))
+		for i, h := range rawFirstRow {
+			h = strings.TrimPrefix(strings.TrimSpace(h), "\uFEFF")
+			headers[i] = h
+		}
+	} else {
+		headers = make([]string, len(rawFirstRow))
+		for i := range rawFirstRow {
+			headers[i] = fmt.Sprintf("Column %d", i+1)
+		}
+	}
+
+	phoneCol := "phone"
+	if mapping != nil && mapping["phone"] != nil {
+		if s := strings.TrimSpace(fmt.Sprintf("%v", mapping["phone"])); s != "" {
+			phoneCol = s
+		}
+	}
+
+	phoneIdx = -1
+	for i, h := range headers {
+		if strings.EqualFold(strings.TrimSpace(h), phoneCol) {
+			phoneIdx = i
+			break
+		}
+	}
+	if phoneIdx == -1 {
+		phoneIdx = 0
+	}
+
+	varIndices = make(map[string]int)
+	if mapping != nil {
+		if varsMap, ok := mapping["variables"].(map[string]any); ok {
+			for varName, colAny := range varsMap {
+				colName := strings.TrimSpace(fmt.Sprintf("%v", colAny))
+				if colName == "" {
+					continue
+				}
+				for i, h := range headers {
+					if strings.EqualFold(strings.TrimSpace(h), colName) {
+						varIndices[varName] = i
+						break
+					}
+				}
+			}
+		}
+	}
+
+	return headers, hasHeaderRow, mapping, phoneIdx, varIndices
+}
+
+func rowHasContent(record []string) bool {
+	for _, cell := range record {
+		if strings.TrimSpace(cell) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func buildMappedRecipientItem(cursor int64, headers, record []string, phoneIdx int, varIndices map[string]int) RecipientItem {
+	phone := ""
+	if phoneIdx >= 0 && phoneIdx < len(record) {
+		phone = strings.TrimSpace(record[phoneIdx])
+	}
+
+	vals := make(map[string]string, len(headers)+len(varIndices))
+	for i, h := range headers {
+		if i < len(record) && h != "" {
+			vals[h] = strings.TrimSpace(record[i])
+		}
+	}
+	for varName, idx := range varIndices {
+		if idx >= 0 && idx < len(record) {
+			vals[varName] = strings.TrimSpace(record[idx])
+		}
+	}
+
+	return RecipientItem{
+		Cursor: cursor,
+		Phone:  phone,
+		Values: vals,
+		Raw:    valsToAny(vals),
+	}
+}
+
 func parseCsvRecipients(path string, config map[string]any, startCursor int64) ([]RecipientItem, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -491,62 +638,47 @@ func parseCsvRecipients(path string, config map[string]any, startCursor int64) (
 	defer f.Close()
 
 	reader := csv.NewReader(f)
-	header, err := reader.Read()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read CSV header: %w", err)
-	}
-
-	mapping, _ := config["mapping"].(map[string]any)
-	phoneCol := "phone"
-	if mapping != nil && mapping["phone"] != nil {
-		phoneCol = fmt.Sprintf("%v", mapping["phone"])
-	}
-
-	phoneIdx := -1
-	for i, h := range header {
-		if strings.EqualFold(strings.TrimSpace(h), strings.TrimSpace(phoneCol)) {
-			phoneIdx = i
+	reader.FieldsPerRecord = -1
+	var firstRow []string
+	for {
+		rec, rErr := reader.Read()
+		if rErr == io.EOF {
+			return nil, fmt.Errorf("uploaded file is empty")
+		}
+		if rErr != nil {
+			continue
+		}
+		if rowHasContent(rec) {
+			firstRow = rec
 			break
 		}
 	}
-	if phoneIdx == -1 {
-		phoneIdx = 0 // default to first column
-	}
+
+	headers, hasHeaderRow, _, phoneIdx, varIndices := resolveUploadHeaderMapping(firstRow, config)
 
 	var items []RecipientItem
 	var cursor int64
+
+	if !hasHeaderRow {
+		cursor++
+		if cursor > startCursor {
+			items = append(items, buildMappedRecipientItem(cursor, headers, firstRow, phoneIdx, varIndices))
+		}
+	}
 
 	for {
 		record, rErr := reader.Read()
 		if rErr == io.EOF {
 			break
 		}
-		if rErr != nil {
+		if rErr != nil || !rowHasContent(record) {
 			continue
 		}
 		cursor++
 		if cursor <= startCursor {
 			continue
 		}
-
-		phone := ""
-		if phoneIdx < len(record) {
-			phone = record[phoneIdx]
-		}
-
-		vals := make(map[string]string)
-		for i, h := range header {
-			if i < len(record) {
-				vals[strings.TrimSpace(h)] = record[i]
-			}
-		}
-
-		items = append(items, RecipientItem{
-			Cursor: cursor,
-			Phone:  phone,
-			Values: vals,
-			Raw:    valsToAny(vals),
-		})
+		items = append(items, buildMappedRecipientItem(cursor, headers, record, phoneIdx, varIndices))
 	}
 
 	return items, nil
@@ -569,49 +701,35 @@ func parseXlsxRecipients(path string, config map[string]any, startCursor int64) 
 		return nil, fmt.Errorf("failed to read rows from XLSX: %w", err)
 	}
 
-	header := rows[0]
-	mapping, _ := config["mapping"].(map[string]any)
-	phoneCol := "phone"
-	if mapping != nil && mapping["phone"] != nil {
-		phoneCol = fmt.Sprintf("%v", mapping["phone"])
-	}
-
-	phoneIdx := -1
-	for i, h := range header {
-		if strings.EqualFold(strings.TrimSpace(h), strings.TrimSpace(phoneCol)) {
-			phoneIdx = i
+	firstIdx := -1
+	for i, r := range rows {
+		if rowHasContent(r) {
+			firstIdx = i
 			break
 		}
 	}
-	if phoneIdx == -1 {
-		phoneIdx = 0
+	if firstIdx == -1 {
+		return nil, fmt.Errorf("uploaded spreadsheet contains no data")
 	}
 
+	headers, hasHeaderRow, _, phoneIdx, varIndices := resolveUploadHeaderMapping(rows[firstIdx], config)
+
 	var items []RecipientItem
-	for i := 1; i < len(rows); i++ {
-		cursor := int64(i)
+	var cursor int64
+	startRow := firstIdx + 1
+	if !hasHeaderRow {
+		startRow = firstIdx
+	}
+
+	for i := startRow; i < len(rows); i++ {
+		if !rowHasContent(rows[i]) {
+			continue
+		}
+		cursor++
 		if cursor <= startCursor {
 			continue
 		}
-		record := rows[i]
-		phone := ""
-		if phoneIdx < len(record) {
-			phone = record[phoneIdx]
-		}
-
-		vals := make(map[string]string)
-		for j, h := range header {
-			if j < len(record) {
-				vals[strings.TrimSpace(h)] = record[j]
-			}
-		}
-
-		items = append(items, RecipientItem{
-			Cursor: cursor,
-			Phone:  phone,
-			Values: vals,
-			Raw:    valsToAny(vals),
-		})
+		items = append(items, buildMappedRecipientItem(cursor, headers, rows[i], phoneIdx, varIndices))
 	}
 
 	return items, nil

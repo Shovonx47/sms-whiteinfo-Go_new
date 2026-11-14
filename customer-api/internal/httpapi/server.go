@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -39,6 +40,8 @@ type Server struct {
 	mailer         *email.Mailer
 	loginLimiter   *LoginLimiter
 	rabbitClient   *queue.RabbitMQClient
+	submitLockMu   sync.Mutex
+	submitLocks    map[string]time.Time
 }
 
 func New(config config.Config, database *sql.DB) *Server {
@@ -84,6 +87,7 @@ func New(config config.Config, database *sql.DB) *Server {
 		mailer:         mailer,
 		loginLimiter:   NewLoginLimiter(),
 		rabbitClient:   rabbitClient,
+		submitLocks:    make(map[string]time.Time),
 	}
 }
 
@@ -126,9 +130,9 @@ func (server *Server) StopBackground() {
 
 func (server *Server) App() *fiber.App {
 	app := fiber.New(fiber.Config{
-		AppName:            "SMS Whiteinfo Customer API",
-		BodyLimit:          20 * 1024 * 1024, // 20MB for file uploads
-		TrustProxy:         true,
+		AppName:    "SMS Whiteinfo Customer API",
+		BodyLimit:  20 * 1024 * 1024, // 20MB for file uploads
+		TrustProxy: true,
 		TrustProxyConfig: fiber.TrustProxyConfig{
 			Proxies:  []string{"127.0.0.1", "::1"},
 			Loopback: true,
@@ -162,6 +166,8 @@ func (server *Server) App() *fiber.App {
 		AllowMethods:     []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
 		AllowCredentials: true,
 	}))
+
+	app.Use(server.maintenanceGuard)
 
 	app.Get("/health", func(context fiber.Ctx) error {
 		if err := server.db.Ping(); err != nil {
@@ -209,6 +215,10 @@ func (server *Server) App() *fiber.App {
 	api.Post("/reset-password", server.resetPassword)
 	api.Get("/register/plan/:slug", server.registerPlan)
 
+	// Signup verification codes (public: no account exists yet).
+	api.Post("/otp/send", server.otpSend)
+	api.Post("/otp/verify", server.otpVerify)
+
 	// Protected routes
 	protected := api.Group("", server.authenticate)
 	protected.Post("/logout", server.logout)
@@ -221,17 +231,26 @@ func (server *Server) App() *fiber.App {
 
 	// Messages
 	protected.Get("/messages", server.messages)
+	protected.Get("/messages/export", server.exportMessages)
+	protected.Get("/messages/:id", server.messageDetail)
 	protected.Get("/recent-recipients", server.recentRecipients)
 	protected.Post("/messages/send", server.sendMessage)
 	protected.Post("/messages/schedule", server.scheduleMessage)
 	protected.Post("/messages/bulk-send", server.bulkSend)
+	protected.Post("/messages/upload-preview", server.uploadRecipientPreview)
 
 	// Batches
 	protected.Get("/batches", server.batches)
+	protected.Get("/batches/export", server.exportBatches)
 	protected.Get("/batches/:id", server.batchDetail)
+	protected.Get("/batches/:id/failed-report", server.downloadBatchFailedReport)
+	protected.Post("/batches/:id/pause", server.pauseScheduledMessage)
+	protected.Post("/batches/:id/resume", server.resumeScheduledMessage)
+	protected.Delete("/batches/:id", server.deleteScheduledMessage)
 
 	// Scheduled Messages
 	protected.Get("/scheduled-messages", server.scheduledMessages)
+	protected.Post("/scheduled-messages/bulk-delete", server.bulkDeleteScheduledMessages)
 	protected.Put("/scheduled-messages/:id", server.updateScheduledMessage)
 	protected.Post("/scheduled-messages/:id/pause", server.pauseScheduledMessage)
 	protected.Post("/scheduled-messages/:id/resume", server.resumeScheduledMessage)
@@ -243,25 +262,36 @@ func (server *Server) App() *fiber.App {
 
 	// Contacts
 	protected.Get("/contacts", server.contacts)
+	protected.Get("/contacts/export", server.exportContacts)
 	protected.Post("/contacts", server.createContact)
+	protected.Post("/contacts/bulk-delete", server.bulkDeleteContacts)
+	protected.Put("/contacts/:id", server.updateContact)
 	protected.Delete("/contacts/:id", server.deleteContact)
 
 	// Groups
 	protected.Get("/groups", server.groups)
 	protected.Post("/groups", server.createGroup)
+	protected.Post("/groups/bulk-delete", server.bulkDeleteGroups)
 	protected.Get("/groups/:id", server.groupDetail)
 	protected.Put("/groups/:id", server.updateGroup)
 	protected.Delete("/groups/:id", server.deleteGroup)
+	protected.Get("/groups/:id/contacts", server.groupContacts)
+	protected.Get("/groups/:id/contacts/export", server.exportGroupContacts)
 	protected.Post("/groups/:id/contacts", server.attachGroupContacts)
+	protected.Post("/groups/:id/contacts/import", server.importGroupContacts)
+	protected.Post("/groups/:id/contacts/bulk-detach", server.bulkDetachGroupContacts)
 	protected.Delete("/groups/:id/contacts/:contact_id", server.detachGroupContact)
 
 	// Templates
 	protected.Get("/templates", server.templates)
 	protected.Post("/templates", server.createTemplate)
+	protected.Post("/templates/bulk-delete", server.bulkDeleteTemplates)
+	protected.Get("/templates/:id", server.templateDetail)
+	protected.Put("/templates/:id", server.updateTemplate)
 	protected.Delete("/templates/:id", server.deleteTemplate)
 
 	// Transactions
-	protected.Get("/transactions", server.transactions)
+	protected.Get("/transactions", server.transactionsReport)
 
 	// Deposits
 	protected.Get("/deposits", server.deposits)
@@ -271,29 +301,37 @@ func (server *Server) App() *fiber.App {
 	protected.Get("/kyc", server.kycShow)
 	protected.Post("/kyc", server.kycSubmit)
 
+	// Database notifications
+	protected.Get("/notifications", server.notifications)
+	protected.Post("/notifications/read-all", server.markAllNotificationsRead)
+	protected.Post("/notifications/:id/read", server.markNotificationRead)
+
 	// IP Whitelists
-	protected.Get("/ip-whitelists", server.ipWhitelists)
-	protected.Post("/ip-whitelists", server.createIpWhitelist)
-	protected.Delete("/ip-whitelists/:id", server.deleteIpWhitelist)
+	protected.Get("/ip-whitelists", server.devIPWhitelistsList)
+	protected.Post("/ip-whitelists", server.devIPWhitelistCreate)
+	protected.Put("/ip-whitelists/:id", server.devIPWhitelistUpdate)
+	protected.Delete("/ip-whitelists/:id", server.devIPWhitelistDelete)
 
 	// Pricing
-	protected.Get("/pricing", server.pricing)
+	protected.Get("/pricing", server.pricingReport)
 
 	// Developer / API tokens
-	protected.Get("/tokens", server.apiTokens)
-	protected.Post("/tokens", server.createApiToken)
-	protected.Delete("/tokens/:id", server.deleteApiToken)
+	protected.Get("/tokens", server.devTokensList)
+	protected.Post("/tokens", server.devTokenCreate)
+	protected.Post("/tokens/bulk-delete", server.devTokensBulkDelete)
+	protected.Put("/tokens/:id", server.devTokenUpdate)
+	protected.Delete("/tokens/:id", server.devTokenDelete)
+
+	// Global Search
+	protected.Get("/global-search", server.globalSearch)
 
 	// Analytics
-	protected.Get("/analytics/messaging", server.analyticsMessaging)
+	protected.Get("/analytics/messaging", server.messagingAnalytics)
+	protected.Get("/analytics/messaging/export", server.exportMessagingAnalytics)
 	protected.Get("/analytics/billing", server.analyticsBilling)
 
 	// Live queue
 	protected.Get("/live-queue", server.liveQueue)
-
-	// OTP
-	protected.Post("/otp/send", server.otpSend)
-	protected.Post("/otp/verify", server.otpVerify)
 
 	// External developer API (replaces Laravel routes/api.php)
 	server.RegisterExternalAPI(app)

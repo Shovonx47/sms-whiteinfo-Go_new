@@ -11,36 +11,15 @@
 	let contactsSectionOpen = $state(true);
 
 	// File upload parsing
+	let importFile = $state<File | null>(null);
 	let fileName = $state('');
-	let parsedPhoneCount = $state(0);
 
 	function handleFileUpload(e: Event) {
 		const target = e.target as HTMLInputElement;
 		const file = target.files?.[0];
 		if (!file) return;
+		importFile = file;
 		fileName = file.name;
-
-		const reader = new FileReader();
-		reader.onload = (event) => {
-			const text = String(event.target?.result || '');
-			const tokens = text.split(/[\r\n,;\s]+/).map((s) => s.trim()).filter(Boolean);
-			const validNumbers: string[] = [];
-			for (const t of tokens) {
-				const cleaned = t.replace(/[^\d+]/g, '');
-				const m = cleaned.match(/^(?:\+?88)?0?(1[3-9]\d{8})$/);
-				if (m) {
-					validNumbers.push('+880' + m[1]);
-				}
-			}
-			parsedPhoneCount = validNumbers.length;
-			if (validNumbers.length > 0) {
-				phoneNumbers = phoneNumbers ? `${phoneNumbers}\n${validNumbers.join('\n')}` : validNumbers.join('\n');
-				toast.success('File Loaded', `Extracted ${validNumbers.length} valid phone numbers.`);
-			} else {
-				toast.warning('No Numbers Found', 'Could not detect valid Bangladeshi mobile numbers in file.');
-			}
-		};
-		reader.readAsText(file);
 	}
 
 	async function handleSubmit(createAnother = false) {
@@ -51,18 +30,47 @@
 
 		submitting = true;
 		try {
-			await api.post('/api/v1/customer/groups', {
-				name: name.trim(),
-				description: description.trim(),
-				_phone_numbers: phoneNumbers.trim()
-			});
-			toast.success('Group Created', `Group "${name}" has been created.`);
+			interface CreateGroupResp {
+				message?: string;
+				valid_count?: number;
+				invalid_count?: number;
+				import_error?: string;
+			}
+			let res: CreateGroupResp;
+			if (importFile) {
+				const fd = new FormData();
+				fd.append('name', name.trim());
+				fd.append('description', description.trim());
+				fd.append('_phone_numbers', phoneNumbers.trim());
+				fd.append('file', importFile);
+				res = await api.upload<CreateGroupResp>('/api/v1/customer/groups', fd);
+			} else {
+				res = await api.post<CreateGroupResp>('/api/v1/customer/groups', {
+					name: name.trim(),
+					description: description.trim(),
+					_phone_numbers: phoneNumbers.trim()
+				});
+			}
+
+			toast.success('Group Created', `Group "${name.trim()}" has been created.`);
+			if (res.import_error) {
+				toast.error('Import Error', res.import_error);
+			}
+			if ((res.valid_count ?? 0) > 0) {
+				const n = res.valid_count ?? 0;
+				toast.success('Contacts Added', `Successfully added ${n} contact${n === 1 ? '' : 's'} to group "${name.trim()}".`);
+			}
+			if ((res.invalid_count ?? 0) > 0) {
+				const inv = res.invalid_count ?? 0;
+				toast.warning('Some Entries Skipped', `${inv} invalid or unreadable ${inv === 1 ? 'entry' : 'entries'} could not be processed.`);
+			}
+
 			if (createAnother) {
 				name = '';
 				description = '';
 				phoneNumbers = '';
+				importFile = null;
 				fileName = '';
-				parsedPhoneCount = 0;
 			} else {
 				goto('/audience/groups');
 			}

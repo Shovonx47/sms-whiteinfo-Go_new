@@ -950,6 +950,8 @@ func (server *Server) resubmitKYC(context fiber.Ctx) error {
 		VALUES (?, ?, ?, 'resubmit_required', 'kyc_status', 'under_review', 'resubmit_required', ?, ?, NOW(), NOW())
 	`, id, admin.AdminID, admin.Name, payload.Reason, context.IP())
 
+	notifyUser(server.db, id, "KYC Resubmission Required", payload.Reason+" Please update the requested fields and resubmit your KYC documents.", "warning")
+
 	return context.JSON(fiber.Map{"message": "KYC resubmission requested successfully."})
 }
 

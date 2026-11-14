@@ -26,6 +26,13 @@
 	let perPage = $state(10);
 	let currentPage = $state(1);
 
+	let searchTimer: ReturnType<typeof setTimeout> | null = null;
+	function handleSearchInput() {
+		if (searchTimer) clearTimeout(searchTimer);
+		searchTimer = setTimeout(() => load(1), 300);
+	}
+	let lastPage = $derived(Math.max(1, (meta as any).last_page ?? Math.ceil((meta.total || 0) / perPage)));
+
 	let selectedTx = $state<Transaction | null>(null);
 
 	async function load(p = 1) {
@@ -100,6 +107,7 @@
 				<input
 					type="text"
 					bind:value={search}
+					oninput={handleSearchInput}
 					placeholder="Search"
 					class="w-full rounded-lg border border-gray-300 bg-white py-1.5 pr-3 pl-8 text-xs text-gray-900 placeholder-gray-400 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
 				/>
@@ -196,17 +204,40 @@
 			<div>
 				Showing {filteredTransactions.length > 0 ? (currentPage - 1) * perPage + 1 : 0} to {Math.min(currentPage * perPage, meta.total)} of {meta.total} results
 			</div>
-			<div class="flex items-center gap-2">
-				<span class="text-xs text-gray-500">Per page</span>
-				<select
-					bind:value={perPage}
-					onchange={() => load(1)}
-					class="rounded-lg border border-gray-300 bg-white py-1 px-2 text-xs text-gray-700 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
-				>
-					<option value={10}>10</option>
-					<option value={25}>25</option>
-					<option value={50}>50</option>
-				</select>
+			<div class="flex items-center gap-3">
+				<div class="flex items-center gap-2">
+					<span class="text-xs text-gray-500">Per page</span>
+					<select
+						bind:value={perPage}
+						onchange={() => load(1)}
+						class="rounded-lg border border-gray-300 bg-white py-1 px-2 text-xs text-gray-700 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
+					>
+						<option value={10}>10</option>
+						<option value={25}>25</option>
+						<option value={50}>50</option>
+					</select>
+				</div>
+				{#if lastPage > 1}
+					<div class="flex items-center gap-1">
+						<button
+							type="button"
+							disabled={currentPage <= 1}
+							onclick={() => load(currentPage - 1)}
+							class="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 cursor-pointer"
+						>
+							Previous
+						</button>
+						<span class="px-2 text-xs text-gray-500">Page {currentPage} / {lastPage}</span>
+						<button
+							type="button"
+							disabled={currentPage >= lastPage}
+							onclick={() => load(currentPage + 1)}
+							class="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 cursor-pointer"
+						>
+							Next
+						</button>
+					</div>
+				{/if}
 			</div>
 		</div>
 	</div>

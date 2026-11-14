@@ -13,6 +13,13 @@ export interface User {
 	status: string;
 	kyc_status: string;
 	created_at: string;
+	front_nid?: string | null;
+	created_by_admin?: boolean;
+	created_by_sp?: boolean;
+	sms_auto_approved?: boolean;
+	api_access?: boolean;
+	kyc_resubmit_fields?: string | null;
+	kyc_rejected_reason?: string | null;
 }
 
 interface AuthState {
@@ -54,14 +61,8 @@ function createAuthStore() {
 			initPromise = (async () => {
 				state.loading = true;
 
-				const token = api.getToken();
-				if (!token) {
-					state.user = null;
-					state.initialized = true;
-					state.loading = false;
-					return;
-				}
-
+				// Always ask the API: the customer session cookie may be valid even
+				// when localStorage has no bearer token (e.g. after registration).
 				try {
 					const data = await api.get<{ data: User }>('/api/v1/customer/me');
 					state.user = data.data;
@@ -78,6 +79,19 @@ function createAuthStore() {
 			})();
 
 			return initPromise;
+		},
+
+		async refresh() {
+			try {
+				const data = await api.get<{ data: User }>('/api/v1/customer/me');
+				state.user = data.data;
+				state.initialized = true;
+			} catch (e) {
+				if (e instanceof ApiError && e.status === 401) {
+					api.clearToken();
+					state.user = null;
+				}
+			}
 		},
 
 		async login(email: string, password: string, remember: boolean = true) {

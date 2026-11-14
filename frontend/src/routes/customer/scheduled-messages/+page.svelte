@@ -61,8 +61,46 @@
 	let deleteOpen = $state(false);
 	let deletingItem = $state<ScheduledItem | null>(null);
 	let deleting = $state(false);
+	let selectedIds = $state<number[]>([]);
+	let bulkDeleting = $state(false);
 
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+	let allSelected = $derived(
+		items.length > 0 && items.every((item) => selectedIds.includes(item.id))
+	);
+
+	function toggleSelectAll() {
+		if (allSelected) {
+			selectedIds = [];
+		} else {
+			selectedIds = items.map((item) => item.id);
+		}
+	}
+
+	function toggleSelect(id: number) {
+		if (selectedIds.includes(id)) {
+			selectedIds = selectedIds.filter((x) => x !== id);
+		} else {
+			selectedIds = [...selectedIds, id];
+		}
+	}
+
+	async function handleBulkDelete() {
+		if (selectedIds.length === 0 || bulkDeleting) return;
+		bulkDeleting = true;
+		try {
+			await api.post('/api/v1/customer/scheduled-messages/bulk-delete', { ids: selectedIds });
+			toast.success('Scheduled Messages Deleted', `Deleted ${selectedIds.length} scheduled message(s).`);
+			selectedIds = [];
+			await load(1);
+		} catch (e) {
+			const msg = e instanceof ApiError ? (e.data.message as string) : 'Could not delete selected schedules.';
+			toast.error('Bulk Delete Failed', msg);
+		} finally {
+			bulkDeleting = false;
+		}
+	}
 
 	async function load(page = 1, silent = false) {
 		if (!silent) loading = true;
@@ -325,23 +363,35 @@
 			</button>
 		</div>
 
-		<div class="relative w-full sm:w-72">
-			<input
-				type="text"
-				bind:value={search}
-				oninput={() => load(1)}
-				placeholder="Search recipient, sender, or content..."
-				class="w-full rounded-xl border border-gray-200 bg-white py-2 pl-9 pr-3 text-sm text-gray-900 placeholder-gray-400 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600 dark:border-gray-800 dark:bg-gray-900 dark:text-white"
-			/>
-			<svg
-				class="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-gray-400"
-				fill="none"
-				viewBox="0 0 24 24"
-				stroke-width="2"
-				stroke="currentColor"
-			>
-				<path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-			</svg>
+		<div class="flex flex-wrap items-center gap-2">
+			{#if selectedIds.length > 0}
+				<button
+					type="button"
+					disabled={bulkDeleting}
+					onclick={handleBulkDelete}
+					class="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white shadow-xs hover:bg-rose-500 disabled:opacity-50 cursor-pointer"
+				>
+					{bulkDeleting ? 'Deleting…' : `Delete Selected (${selectedIds.length})`}
+				</button>
+			{/if}
+			<div class="relative w-full sm:w-72">
+				<input
+					type="text"
+					bind:value={search}
+					oninput={() => load(1)}
+					placeholder="Search recipient, sender, or content..."
+					class="w-full rounded-xl border border-gray-200 bg-white py-2 pl-9 pr-3 text-sm text-gray-900 placeholder-gray-400 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600 dark:border-gray-800 dark:bg-gray-900 dark:text-white"
+				/>
+				<svg
+					class="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-gray-400"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke-width="2"
+					stroke="currentColor"
+				>
+					<path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+				</svg>
+			</div>
 		</div>
 	</div>
 
@@ -351,6 +401,15 @@
 			<table class="w-full text-left text-sm">
 				<thead>
 					<tr class="border-b border-gray-100 bg-gray-50/50 text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:border-gray-800 dark:bg-gray-800/40 dark:text-gray-400">
+						<th class="w-10 px-4 py-3.5">
+							<input
+								type="checkbox"
+								checked={allSelected}
+								onchange={toggleSelectAll}
+								class="rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+								aria-label="Select all scheduled messages"
+							/>
+						</th>
 						<th class="px-6 py-3.5">SENDER ID</th>
 						<th class="px-6 py-3.5">RECIPIENT NUMBER</th>
 						<th class="px-6 py-3.5">SOURCE</th>
@@ -390,14 +449,14 @@
 					{#if loading}
 						{#each { length: 3 } as _, i (i)}
 							<tr>
-								<td colspan="8" class="px-6 py-4">
+								<td colspan="9" class="px-6 py-4">
 									<div class="h-6 w-full animate-pulse rounded bg-gray-100 dark:bg-gray-800"></div>
 								</td>
 							</tr>
 						{/each}
 					{:else if items.length === 0}
 						<tr>
-							<td colspan="8" class="px-6 py-16 text-center">
+							<td colspan="9" class="px-6 py-16 text-center">
 								<div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 text-gray-400 dark:bg-gray-800">
 									<svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
 										<path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
@@ -425,6 +484,15 @@
 					{:else}
 						{#each items as item (item.id)}
 							<tr class="transition hover:bg-gray-50/70 dark:hover:bg-gray-800/40">
+								<td class="px-4 py-4">
+									<input
+										type="checkbox"
+										checked={selectedIds.includes(item.id)}
+										onchange={() => toggleSelect(item.id)}
+										class="rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+										aria-label="Select scheduled message {item.id}"
+									/>
+								</td>
 								<td class="whitespace-nowrap px-6 py-4">
 									<span class="inline-flex items-center rounded-md bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-700 ring-1 ring-inset ring-teal-600/20 dark:bg-teal-950/60 dark:text-teal-300">
 										{item.sender_id}

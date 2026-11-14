@@ -70,4 +70,3 @@ func (server *Server) impersonateSP(context fiber.Ctx) error {
 		"expires_at": expiresAt.Format(time.RFC3339),
 	}})
 }
-

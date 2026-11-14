@@ -137,15 +137,20 @@
 
 		submitting = true;
 		try {
-			const res = await api.post<{ data: { id: number } }>('/api/v1/customer/messages/send', {
+			const res = await api.post<{ data: { id: number; requires_approval?: boolean } }>('/api/v1/customer/messages/send', {
 				sender_id: selectedSenderId,
+				template_id: selectedTemplateId,
 				phones: [cleanPhone],
 				body: body.trim(),
 				source: 'quick'
 			});
-			toast.success('Message sent successfully', 'Your quick message has been sent successfully.');
+			if (res?.data?.requires_approval) {
+				toast.warning('Awaiting approval', 'Your message batch is pending admin approval before sending.');
+			} else {
+				toast.success('Message sent successfully', 'Your quick message has been sent successfully.');
+			}
 			if (res?.data?.id) {
-				goto(`/customer/batches/${res.data.id}`);
+				goto(`/messaging/batches/${res.data.id}`);
 			} else {
 				goto('/messaging/batches');
 			}
@@ -169,8 +174,9 @@
 
 		submitting = true;
 		try {
-			await api.post('/api/v1/customer/messages/schedule', {
+			const res = await api.post<{ data: { id: number } }>('/api/v1/customer/messages/schedule', {
 				sender_id: selectedSenderId,
+				template_id: selectedTemplateId,
 				phones: [cleanPhone],
 				body: body.trim(),
 				scheduled_date: schedDate,
@@ -181,7 +187,11 @@
 			});
 			toast.success('Message scheduled successfully', `Your message has been scheduled for ${schedDate} at ${schedHour}:${schedMinute} ${schedPeriod}.`);
 			scheduleOpen = false;
-			goto('/messaging/scheduled-messages');
+			if (res?.data?.id) {
+				goto(`/messaging/batches/${res.data.id}`);
+			} else {
+				goto('/messaging/scheduled-messages');
+			}
 		} catch (e) {
 			if (e instanceof ApiError) {
 				toast.error('Invalid Schedule Time', (e.data.message as string) ?? 'Please try again.');

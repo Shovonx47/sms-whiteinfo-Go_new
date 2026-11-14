@@ -292,13 +292,13 @@ func (server *Server) reportsExecutive(context fiber.Ctx) error {
 
 // Bulk SMS Templates
 type templateItem struct {
-	ID          int64   `json:"id"`
-	Name        string  `json:"name"`
-	Body        string  `json:"body"`
-	Customer    string  `json:"customer"`
-	Approval    string  `json:"approval"`
-	SenderID    *string `json:"sender_id"`
-	CreatedAt   string  `json:"created_at"`
+	ID        int64   `json:"id"`
+	Name      string  `json:"name"`
+	Body      string  `json:"body"`
+	Customer  string  `json:"customer"`
+	Approval  string  `json:"approval"`
+	SenderID  *string `json:"sender_id"`
+	CreatedAt string  `json:"created_at"`
 }
 
 func (server *Server) templates(context fiber.Ctx) error {
@@ -415,19 +415,19 @@ func (server *Server) contacts(context fiber.Ctx) error {
 
 // System Health Monitoring
 type systemHealthResponse struct {
-	Status         string                 `json:"status"`
-	UptimeSeconds  int64                  `json:"uptime_seconds"`
-	GoRoutines     int                    `json:"goroutines"`
-	MemoryAllocMB  float64                `json:"memory_alloc_mb"`
-	MemorySysMB    float64                `json:"memory_sys_mb"`
-	DatabaseState  string                 `json:"database_state"`
-	OpenDBConns    int                    `json:"open_db_conns"`
-	InUseDBConns   int                    `json:"in_use_db_conns"`
-	IdleDBConns    int                    `json:"idle_db_conns"`
-	Queues         map[string]int         `json:"queues"`
-	GatewaysHealth map[string]string      `json:"gateways_health"`
-	Environment    string                 `json:"environment"`
-	ServerTime     string                 `json:"server_time"`
+	Status         string            `json:"status"`
+	UptimeSeconds  int64             `json:"uptime_seconds"`
+	GoRoutines     int               `json:"goroutines"`
+	MemoryAllocMB  float64           `json:"memory_alloc_mb"`
+	MemorySysMB    float64           `json:"memory_sys_mb"`
+	DatabaseState  string            `json:"database_state"`
+	OpenDBConns    int               `json:"open_db_conns"`
+	InUseDBConns   int               `json:"in_use_db_conns"`
+	IdleDBConns    int               `json:"idle_db_conns"`
+	Queues         map[string]int    `json:"queues"`
+	GatewaysHealth map[string]string `json:"gateways_health"`
+	Environment    string            `json:"environment"`
+	ServerTime     string            `json:"server_time"`
 }
 
 var serverStartTime = time.Now()
@@ -459,15 +459,15 @@ func (server *Server) monitoringSystemHealth(context fiber.Ctx) error {
 	}
 
 	resp := systemHealthResponse{
-		Status:         "operational",
-		UptimeSeconds:  int64(time.Since(serverStartTime).Seconds()),
-		GoRoutines:     runtime.NumGoroutine(),
-		MemoryAllocMB:  float64(mem.Alloc) / 1024 / 1024,
-		MemorySysMB:    float64(mem.Sys) / 1024 / 1024,
-		DatabaseState:  dbState,
-		OpenDBConns:    dbStats.OpenConnections,
-		InUseDBConns:   dbStats.InUse,
-		IdleDBConns:    dbStats.Idle,
+		Status:        "operational",
+		UptimeSeconds: int64(time.Since(serverStartTime).Seconds()),
+		GoRoutines:    runtime.NumGoroutine(),
+		MemoryAllocMB: float64(mem.Alloc) / 1024 / 1024,
+		MemorySysMB:   float64(mem.Sys) / 1024 / 1024,
+		DatabaseState: dbState,
+		OpenDBConns:   dbStats.OpenConnections,
+		InUseDBConns:  dbStats.InUse,
+		IdleDBConns:   dbStats.Idle,
 		Queues: map[string]int{
 			"quick_queue": quickPending,
 			"bulk_queue":  bulkPending,
@@ -554,13 +554,13 @@ func (server *Server) auditLogsGlobal(context fiber.Ctx) error {
 
 // Route Plans and Rules
 type routePlanItem struct {
-	ID          int64   `json:"id"`
-	Name        string  `json:"name"`
-	Code        string  `json:"code"`
-	Description string  `json:"description"`
-	Gateways    string  `json:"gateways"`
-	IsDefault   bool    `json:"is_default"`
-	CreatedAt   string  `json:"created_at"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Code        string `json:"code"`
+	Description string `json:"description"`
+	Gateways    string `json:"gateways"`
+	IsDefault   bool   `json:"is_default"`
+	CreatedAt   string `json:"created_at"`
 }
 
 func (server *Server) routingDashboard(context fiber.Ctx) error {

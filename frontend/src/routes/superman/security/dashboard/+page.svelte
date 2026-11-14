@@ -14,8 +14,8 @@
 		total_users: 0,
 		api_users: 0,
 		pending_ip_requests: 0,
-		active_firewall_rule: 'Strict ASN + IP Filtering',
-		blocked_attacks_24h: 14
+		active_firewall_rule: '—',
+		blocked_attacks_24h: 0
 	});
 	let loading = $state(true);
 
@@ -70,7 +70,7 @@
 		<div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 shadow-xs">
 			<span class="text-xs font-medium text-emerald-600 uppercase tracking-wider">Blocked Threats (24h)</span>
 			<p class="text-3xl font-bold text-emerald-600 mt-1">{data.blocked_attacks_24h}</p>
-			<span class="text-[11px] text-emerald-600 mt-1 block">Auto-mitigated at edge</span>
+			<span class="text-[11px] text-emerald-600 mt-1 block">Rejected/revoked from audit log (24h)</span>
 		</div>
 	</div>
 

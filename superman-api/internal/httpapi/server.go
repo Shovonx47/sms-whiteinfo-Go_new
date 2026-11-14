@@ -33,8 +33,8 @@ func New(config config.Config, database *sql.DB) *Server {
 
 func (server *Server) App() *fiber.App {
 	app := fiber.New(fiber.Config{
-		AppName:            "SMS Whiteinfo Superman API",
-		TrustProxy:         true,
+		AppName:    "SMS Whiteinfo Superman API",
+		TrustProxy: true,
 		TrustProxyConfig: fiber.TrustProxyConfig{
 			Proxies:  []string{"127.0.0.1", "::1"},
 			Loopback: true,
@@ -111,6 +111,8 @@ func (server *Server) App() *fiber.App {
 	protected.Get("/ip-whitelist-requests", server.ipWhitelistRequests)
 	protected.Post("/ip-whitelist-requests/:id/approve", server.approveIPWhitelist)
 	protected.Post("/ip-whitelist-requests/:id/reject", server.rejectIPWhitelist)
+	protected.Post("/approval-center/ip-whitelists/:id/approve", server.approveIPWhitelist)
+	protected.Post("/approval-center/ip-whitelists/:id/reject", server.rejectIPWhitelist)
 	protected.Get("/sms-logs", server.smsLogs)
 	protected.Get("/queue-monitor", server.queueMonitor)
 	protected.Post("/queue-actions/:action", server.queueAction)
@@ -202,6 +204,8 @@ func (server *Server) App() *fiber.App {
 	protected.Get("/providers/error-mapping", server.errorMappings)
 	protected.Get("/reports/executive", server.reportsExecutive)
 	protected.Get("/templates", server.templates)
+	protected.Post("/templates/:id/approve", server.approveTemplate)
+	protected.Post("/templates/:id/reject", server.rejectTemplate)
 	protected.Get("/contacts", server.contacts)
 	protected.Get("/monitoring/system-health", server.monitoringSystemHealth)
 	protected.Get("/audit-logs/global", server.auditLogsGlobal)
@@ -216,8 +220,13 @@ func (server *Server) App() *fiber.App {
 	protected.Post("/system-settings/dlr", server.systemSettingsDlr)
 	protected.Get("/system-settings/maintenance", server.systemSettingsMaintenance)
 	protected.Post("/system-settings/maintenance", server.systemSettingsMaintenance)
+	protected.Get("/notifications", server.adminNotifications)
+	protected.Post("/notifications/read-all", server.markAllAdminNotificationsRead)
+	protected.Post("/notifications/:id/read", server.markAdminNotificationRead)
+
 	protected.Get("/system-settings/backups", server.systemSettingsBackups)
 	protected.Post("/system-settings/backups", server.systemSettingsBackups)
+	protected.Get("/system-settings/backups/download/:filename", server.downloadDatabaseBackup)
 
 	// Security & Fraud Control
 	protected.Get("/security/dashboard", server.securityDashboard)

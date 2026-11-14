@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api, ApiError } from '$lib/api.js';
+	import { auth } from '$lib/stores/auth.svelte.js';
 	import { toast } from '$lib/components/Toast.svelte';
 	import { computeSmsStats } from '$lib/utils/sms.js';
 	import { goto } from '$app/navigation';
@@ -60,9 +61,13 @@
 
 	// Upload source
 	let uploadFile = $state<File | null>(null);
+	let tempPath = $state('');
 	let fileHeaders = $state<string[]>([]);
 	let fileSample = $state<Record<string, string>[]>([]);
-	let parsedPhoneList = $state<string[]>([]);
+	let fileTotalRows = $state(0);
+	let hasHeaderRow = $state(true);
+	let uploadingPreview = $state(false);
+	let dedup = $state(true);
 	let phoneColumn = $state('');
 	let variableMappings = $state<Record<string, string>>({});
 
@@ -85,11 +90,42 @@
 	let bodyVariables = $derived([...new Set([...body.matchAll(/\{(\w+)\}/g)].map((m) => m[1]))]);
 	let smsStats = $derived(computeSmsStats(body));
 
+	function messageMatchesTemplate(templateBody: string, messageBody: string): boolean {
+		const normT = templateBody.trim().replace(/\r\n?/g, '\n');
+		const normM = messageBody.trim().replace(/\r\n?/g, '\n');
+		if (!normT || !normM) return false;
+		const parts = normT.split(/(\{\w+\})/g);
+		const pattern = parts
+			.map((p) => (/^\{\w+\}$/.test(p) ? '[\\s\\S]*?' : p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+			.join('');
+		try {
+			return new RegExp(`^${pattern}$`).test(normM);
+		} catch {
+			return normT === normM;
+		}
+	}
+
+	let selectedTemplate = $derived(templates.find((t) => t.id === selectedTemplateId) ?? null);
+	let approvedTemplateActive = $derived(
+		Boolean(selectedTemplate && selectedTemplate.approval === 'approved' && messageMatchesTemplate(selectedTemplate.body, body))
+	);
+	let accountNeedsApproval = $derived(auth.user?.sms_auto_approved === false);
+
+	let mappedSampleMessage = $derived.by(() => {
+		if (!body.trim() || fileSample.length === 0) return '';
+		const firstRow = fileSample[0];
+		return body.replace(/\{(\w+)\}/g, (full, v) => {
+			const col = variableMappings[v];
+			return col && firstRow[col] !== undefined && firstRow[col] !== '' ? firstRow[col] : full;
+		});
+	});
+
 	// Sender selected object
 	let selectedSender = $derived(senders.find((s) => s.id === selectedSenderId));
-	let isMasking = $derived(
-		selectedSender?.type ? selectedSender.type.toLowerCase().includes('masking') : false
-	);
+	let isMasking = $derived.by(() => {
+		const t = selectedSender?.type?.toLowerCase().trim() ?? '';
+		return t !== '' && t !== 'numeric' && t !== 'non_masking' && t !== 'non-masking' && t !== 'number';
+	});
 
 	// Active rate per SMS
 	let activeRate = $derived.by(() => {
@@ -117,7 +153,7 @@
 			return total;
 		}
 		if (source === 'upload') {
-			return parsedPhoneList.length;
+			return fileTotalRows;
 		}
 		return 0;
 	});
@@ -264,66 +300,77 @@
 		}
 	}
 
-	// CSV Parsing
+	function syncAutoMappings(headers: string[]) {
+		const detected = headers.find((h) => /phone|mobile|number|msisdn|contact/i.test(h));
+		phoneColumn = detected ?? headers[0] ?? '';
+
+		const nextMap: Record<string, string> = {};
+		for (const v of bodyVariables) {
+			if (variableMappings[v] && headers.includes(variableMappings[v])) {
+				nextMap[v] = variableMappings[v];
+			} else {
+				const exact = headers.find((h) => h.toLowerCase() === v.toLowerCase());
+				nextMap[v] = exact ?? '';
+			}
+		}
+		variableMappings = nextMap;
+	}
+
+	$effect(() => {
+		if (fileHeaders.length === 0) return;
+		let changed = false;
+		const nextMap = { ...variableMappings };
+		for (const v of bodyVariables) {
+			if (!(v in nextMap)) {
+				const exact = fileHeaders.find((h) => h.toLowerCase() === v.toLowerCase());
+				nextMap[v] = exact ?? '';
+				changed = true;
+			}
+		}
+		if (changed) variableMappings = nextMap;
+	});
+
+	// Upload Preview via backend parser (.csv, .txt, .xlsx)
+	async function previewUploadedFile(file: File, withHeader = hasHeaderRow) {
+		uploadingPreview = true;
+		try {
+			const fd = new FormData();
+			fd.append('file', file);
+			fd.append('has_header_row', withHeader ? '1' : '0');
+			const res = await api.upload<{
+				data: {
+					temp_path: string;
+					headers: string[];
+					sample: Record<string, string>[];
+					total_rows: number;
+					has_header_row: boolean;
+				};
+			}>('/api/v1/customer/messages/upload-preview', fd);
+
+			tempPath = res.data.temp_path;
+			fileHeaders = res.data.headers ?? [];
+			fileSample = res.data.sample ?? [];
+			fileTotalRows = res.data.total_rows ?? 0;
+			hasHeaderRow = res.data.has_header_row ?? withHeader;
+			syncAutoMappings(fileHeaders);
+			toast.success('File loaded', `Detected ${fileTotalRows} rows.`);
+		} catch (e) {
+			tempPath = '';
+			fileHeaders = [];
+			fileSample = [];
+			fileTotalRows = 0;
+			const msg = e instanceof ApiError ? String(e.data?.message ?? 'Could not parse uploaded file.') : 'Could not upload file preview.';
+			toast.error('Upload error', msg);
+		} finally {
+			uploadingPreview = false;
+		}
+	}
+
 	async function handleFileUpload(e: Event) {
 		const file = (e.target as HTMLInputElement).files?.[0];
 		if (!file) return;
 		uploadFile = file;
-
-		try {
-			const text = await file.text();
-			const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-			if (lines.length < 2) {
-				toast.error('Invalid file', 'File must contain a header row and data rows.');
-				return;
-			}
-
-			const parseLine = (l: string): string[] => {
-				const row: string[] = [];
-				let inQuotes = false;
-				let cur = '';
-				for (const ch of l) {
-					if (ch === '"') {
-						inQuotes = !inQuotes;
-					} else if (ch === ',' && !inQuotes) {
-						row.push(cur.trim().replace(/^"|"$/g, ''));
-						cur = '';
-					} else {
-						cur += ch;
-					}
-				}
-				row.push(cur.trim().replace(/^"|"$/g, ''));
-				return row;
-			};
-
-			fileHeaders = parseLine(lines[0]);
-			// Auto detect phone column
-			const detected = fileHeaders.find((h) => /phone|mobile|number|msisdn/i.test(h));
-			phoneColumn = detected ?? fileHeaders[0] ?? '';
-
-			const sample: Record<string, string>[] = [];
-			const pList: string[] = [];
-			const phoneIdx = fileHeaders.indexOf(phoneColumn);
-
-			for (let i = 1; i < lines.length; i++) {
-				const vals = parseLine(lines[i]);
-				if (vals.some((v) => v.trim())) {
-					const obj: Record<string, string> = {};
-					fileHeaders.forEach((h, idx) => {
-						obj[h] = vals[idx] ?? '';
-					});
-					if (sample.length < 5) sample.push(obj);
-					const ph = (vals[phoneIdx] ?? '').trim();
-					if (ph) pList.push(ph);
-				}
-			}
-
-			fileSample = sample;
-			parsedPhoneList = pList;
-			toast.success('File loaded', `Detected ${pList.length} recipient numbers.`);
-		} catch {
-			toast.error('File read error', 'Could not read CSV file.');
-		}
+		await previewUploadedFile(file, hasHeaderRow);
 	}
 
 	// Validation
@@ -356,8 +403,17 @@
 				return false;
 			}
 		} else if (source === 'upload') {
-			if (!uploadFile || parsedPhoneList.length === 0) {
-				toast.error('File required', 'Please upload a recipient file with phone numbers.');
+			if (!uploadFile || !tempPath || fileTotalRows === 0) {
+				toast.error('File required', 'Please upload a valid recipient file.');
+				return false;
+			}
+			if (!phoneColumn) {
+				toast.error('Mapping required', 'Please select which column contains phone numbers.');
+				return false;
+			}
+			const missingVar = bodyVariables.find((v) => !variableMappings[v]);
+			if (missingVar) {
+				toast.error('Mapping required', `Please select a file column for template variable {${missingVar}}.`);
 				return false;
 			}
 		}
@@ -375,33 +431,60 @@
 		scheduleOpen = true;
 	}
 
+	function buildBulkPayload(): Record<string, unknown> {
+		const payload: Record<string, unknown> = {
+			sender_id: selectedSenderId,
+			template_id: selectedTemplateId,
+			body: body.trim(),
+			source
+		};
+
+		if (source === 'manual') {
+			if (bodyVariables.length === 0) {
+				payload.phones = phones;
+			} else {
+				payload.recipients = manualRows
+					.filter((r) => r.phone.trim())
+					.map((r) => ({ phone: r.phone.trim(), values: r.values }));
+			}
+		} else if (source === 'group') {
+			payload.groups = selectedGroupIds;
+			payload.dedup = dedup;
+		} else if (source === 'upload') {
+			payload.temp_path = tempPath;
+			payload.file_total_rows = fileTotalRows;
+			payload.has_header_row = hasHeaderRow;
+			payload.dedup = dedup;
+			const vars: Record<string, string> = {};
+			for (const v of bodyVariables) {
+				if (variableMappings[v]) vars[v] = variableMappings[v];
+			}
+			payload.mapping = {
+				phone: phoneColumn,
+				variables: vars
+			};
+		}
+
+		return payload;
+	}
+
 	async function submitSendNow() {
 		submitting = true;
 		try {
-			let phonePayload: string[] = [];
-			if (source === 'manual') {
-				phonePayload = bodyVariables.length === 0 ? phones : manualRows.map((r) => r.phone.trim()).filter(Boolean);
-			} else if (source === 'upload') {
-				phonePayload = parsedPhoneList;
-			}
-
-			const payload: Record<string, unknown> = {
-				sender_id: selectedSenderId,
-				template_id: selectedTemplateId,
-				body: body.trim(),
-				source
-			};
-
-			if (source === 'group') {
-				payload.groups = selectedGroupIds;
+			const res = await api.post<{ data: { id: number; requires_approval?: boolean } }>(
+				'/api/v1/customer/messages/bulk-send',
+				buildBulkPayload()
+			);
+			if (res.data?.requires_approval) {
+				toast.warning(
+					'Batch queued for Admin Approval',
+					'Your bulk SMS batch has been submitted and awaits admin approval before dispatch.'
+				);
 			} else {
-				payload.phones = phonePayload;
+				toast.success('Message sent successfully', 'Your bulk message batch has been dispatched.');
 			}
-
-			const res = await api.post<{ data: { id: number } }>('/api/v1/customer/messages/bulk-send', payload);
-			toast.success('Message sent successfully', 'Your bulk message batch has been sent successfully.');
 			confirmModalOpen = false;
-			goto(`/customer/batches/${res.data.id}`);
+			goto(`/messaging/batches/${res.data.id}`);
 		} catch (e) {
 			if (e instanceof ApiError) {
 				toast.error('Send failed', (e.data.message as string) ?? 'Please try again.');
@@ -416,34 +499,32 @@
 	async function submitSchedule() {
 		submitting = true;
 		try {
-			let phonePayload: string[] = [];
-			if (source === 'manual') {
-				phonePayload = bodyVariables.length === 0 ? phones : manualRows.map((r) => r.phone.trim()).filter(Boolean);
-			} else if (source === 'upload') {
-				phonePayload = parsedPhoneList;
-			}
-
-			const payload: Record<string, unknown> = {
-				sender_id: selectedSenderId,
-				template_id: selectedTemplateId,
-				body: body.trim(),
-				source,
+			const payload = {
+				...buildBulkPayload(),
 				scheduled_date: schedDate,
 				scheduled_hour: schedHour,
 				scheduled_minute: schedMinute,
 				scheduled_period: schedPeriod
 			};
 
-			if (source === 'group') {
-				payload.groups = selectedGroupIds;
+			const res = await api.post<{ data: { id: number; requires_approval?: boolean } }>(
+				'/api/v1/customer/messages/bulk-send',
+				payload
+			);
+			if (res.data?.requires_approval) {
+				toast.warning(
+					'Scheduled & Awaiting Approval',
+					`Scheduled for ${schedDate} at ${schedHour}:${schedMinute} ${schedPeriod}, pending admin approval.`
+				);
 			} else {
-				payload.phones = phonePayload;
+				toast.success('Batch scheduled successfully', `Your bulk message batch has been scheduled for ${schedDate} at ${schedHour}:${schedMinute} ${schedPeriod}.`);
 			}
-
-			await api.post('/api/v1/customer/messages/bulk-send', payload);
-			toast.success('Batch scheduled successfully', `Your bulk message batch has been scheduled for ${schedDate} at ${schedHour}:${schedMinute} ${schedPeriod}.`);
 			scheduleOpen = false;
-			goto('/customer/scheduled-messages');
+			if (res.data?.id) {
+				goto(`/messaging/batches/${res.data.id}`);
+			} else {
+				goto('/messaging/scheduled-messages');
+			}
 		} catch (e) {
 			if (e instanceof ApiError) {
 				toast.error('Schedule failed', (e.data.message as string) ?? 'Please try again.');
@@ -466,7 +547,7 @@
 <div class="mx-auto max-w-5xl space-y-6">
 	<!-- Breadcrumb -->
 	<nav class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-		<a href="/customer/messages" class="hover:text-gray-800 dark:hover:text-gray-200 transition">Sent Message Details</a>
+		<a href="/messaging/messages" class="hover:text-gray-800 dark:hover:text-gray-200 transition">Sent Message Details</a>
 		<svg class="h-3 w-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
 			<path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
 		</svg>
@@ -477,6 +558,34 @@
 	<div>
 		<h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-gray-100">Bulk Message</h1>
 	</div>
+
+	{#if accountNeedsApproval}
+		{#if approvedTemplateActive}
+			<div class="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-xs text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-200">
+				<svg class="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400 mt-0.5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+					<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+				</svg>
+				<div>
+					<p class="font-semibold text-sm">Approved Template Selected — Auto-Dispatch Enabled</p>
+					<p class="mt-0.5 text-emerald-800/90 dark:text-emerald-300">
+						This message matches an approved template and will be sent immediately without waiting for admin review.
+					</p>
+				</div>
+			</div>
+		{:else}
+			<div class="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200">
+				<svg class="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+					<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+				</svg>
+				<div>
+					<p class="font-semibold text-sm">Admin Approval Required for Bulk SMS</p>
+					<p class="mt-0.5 text-amber-800/90 dark:text-amber-300">
+						Your account requires manual admin approval for bulk campaigns unless you select an approved Bulk SMS template and keep its fixed text unchanged.
+					</p>
+				</div>
+			</div>
+		{/if}
+	{/if}
 
 	<!-- Main Form Card -->
 	<div class="rounded-xl border border-gray-200 bg-white p-6 shadow-xs dark:border-gray-800 dark:bg-gray-900 space-y-6">
@@ -729,16 +838,18 @@
 						</label>
 						<span class="text-gray-500 dark:text-gray-400"> or drag and drop</span>
 					</div>
-					<p class="mt-1 text-xs text-gray-500 dark:text-gray-400">CSV, TXT, or Excel up to 100MB</p>
-					{#if uploadFile}
+					<p class="mt-1 text-xs text-gray-500 dark:text-gray-400">CSV, TXT, or Excel (.xlsx) up to 100MB</p>
+					{#if uploadingPreview}
+						<p class="mt-2 text-xs font-medium text-gray-600 dark:text-gray-300">Parsing uploaded file...</p>
+					{:else if uploadFile && tempPath}
 						<p class="mt-2 text-xs font-semibold text-teal-700 dark:text-teal-300">
-							✓ {uploadFile.name} ({parsedPhoneList.length} numbers parsed)
+							✓ {uploadFile.name} ({fileTotalRows} rows detected)
 						</p>
 					{/if}
 				</div>
 
-				<!-- Helper text with Download Sample Link -->
-				<div class="mt-2 flex flex-wrap items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+				<!-- Helper text with Download Sample Link & Options -->
+				<div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
 					<span>Upload a CSV or Excel file with a <strong>"phone"</strong> column and any variables used in your message body.</span>
 					<a
 						href="/bd_phone_numbers.xlsx"
@@ -749,26 +860,77 @@
 					</a>
 				</div>
 
+				<div class="mt-3 flex flex-wrap items-center gap-5 text-xs text-gray-700 dark:text-gray-300">
+					<label class="inline-flex items-center gap-2 cursor-pointer">
+						<input
+							type="checkbox"
+							bind:checked={hasHeaderRow}
+							onchange={() => { if (uploadFile) previewUploadedFile(uploadFile, hasHeaderRow); }}
+							class="rounded border-gray-300 text-teal-600 focus:ring-teal-500"
+						/>
+						<span>First row is column header</span>
+					</label>
+					<label class="inline-flex items-center gap-2 cursor-pointer">
+						<input
+							type="checkbox"
+							bind:checked={dedup}
+							class="rounded border-gray-300 text-teal-600 focus:ring-teal-500"
+						/>
+						<span>Remove duplicate phone numbers</span>
+					</label>
+				</div>
+
 				<!-- File Preview & Column Mapping -->
 				{#if fileHeaders.length > 0}
-					<div class="mt-4 space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/60">
+					<div class="mt-4 space-y-4 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/60">
 						<div class="flex items-center justify-between">
-							<p class="text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">Upload Preview & Mapping</p>
-							<span class="text-xs text-gray-500">{parsedPhoneList.length} total rows</span>
+							<p class="text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">Upload Preview & Variable Mapping</p>
+							<span class="text-xs text-gray-500">{fileTotalRows} total rows</span>
 						</div>
 
-						<!-- Phone Column Select -->
-						<div class="flex items-center gap-3">
-							<span class="text-xs font-medium text-gray-700 dark:text-gray-300">Phone Number Column:</span>
-							<select
-								bind:value={phoneColumn}
-								class="rounded-md border border-gray-300 bg-white py-1 px-2.5 text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
-							>
-								{#each fileHeaders as h (h)}
-									<option value={h}>{h}</option>
-								{/each}
-							</select>
+						<!-- Phone Column + Dynamic Variable Mappings -->
+						<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+							<div>
+								<label for="map-phone-col" class="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">
+									Phone Number Column <span class="text-red-500">*</span>
+								</label>
+								<select
+									id="map-phone-col"
+									bind:value={phoneColumn}
+									class="w-full rounded-md border border-gray-300 bg-white py-1.5 px-2.5 text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+								>
+									{#each fileHeaders as h (h)}
+										<option value={h}>{h}</option>
+									{/each}
+								</select>
+							</div>
+							{#each bodyVariables as varName (varName)}
+								<div>
+									<label for={"map-var-" + varName} class="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">
+										Column for <span class="font-mono text-teal-700 dark:text-teal-400">{'{' + varName + '}'}</span> <span class="text-red-500">*</span>
+									</label>
+									<select
+										id={"map-var-" + varName}
+										bind:value={variableMappings[varName]}
+										class="w-full rounded-md border border-gray-300 bg-white py-1.5 px-2.5 text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+									>
+										<option value="">— Select Column —</option>
+										{#each fileHeaders as h (h)}
+											<option value={h}>{h}</option>
+										{/each}
+									</select>
+								</div>
+							{/each}
 						</div>
+
+						{#if mappedSampleMessage}
+							<div class="rounded-md border border-teal-200 bg-white p-3 dark:border-teal-900/50 dark:bg-gray-900">
+								<p class="mb-1 text-[11px] font-semibold uppercase tracking-wider text-teal-700 dark:text-teal-400">
+									Sample Message Preview (Row 1)
+								</p>
+								<p class="font-mono text-xs text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{mappedSampleMessage}</p>
+							</div>
+						{/if}
 
 						<!-- Sample Rows Table -->
 						<div class="overflow-x-auto rounded border border-gray-200 dark:border-gray-700">

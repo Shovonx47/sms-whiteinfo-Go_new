@@ -614,6 +614,6 @@ func (server *Server) analyticsMessaging(c fiber.Ctx) error {
 		"delivery_rate_trends": deliveryRateTrends,
 		"source_distribution":  sourceDistribution,
 		"dlr_summary":          dlrSummary,
-		"failed_reasons":        failedReasons,
+		"failed_reasons":       failedReasons,
 	})
 }

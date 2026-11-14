@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -336,4 +337,72 @@ func isGsm7Rune(r rune) bool {
 func RoundFloat(val float64, precision int) float64 {
 	ratio := math.Pow(10, float64(precision))
 	return math.Round(val*ratio) / ratio
+}
+
+// ResolvedOperatorRate represents an operator's effective masking/non-masking rates for display.
+type ResolvedOperatorRate struct {
+	Operator       Operator
+	MaskingRate    *float64
+	NonMaskingRate *float64
+	RateSource     string
+}
+
+// EffectiveOperatorRates returns effective rates for all active operators sorted by operator name,
+// following the same strict tariff-plan -> legacy-override -> operator-default cascade as Resolve.
+func (r *OperatorRateResolver) EffectiveOperatorRates() []ResolvedOperatorRate {
+	ops := make([]Operator, 0, len(r.operators))
+	for _, op := range r.operators {
+		ops = append(ops, op)
+	}
+	sort.Slice(ops, func(i, j int) bool {
+		if ops[i].Name == ops[j].Name {
+			return ops[i].ID < ops[j].ID
+		}
+		return ops[i].Name < ops[j].Name
+	})
+
+	result := make([]ResolvedOperatorRate, 0, len(ops))
+	for _, op := range ops {
+		mRate, nmRate, source := r.resolvePair(op)
+		result = append(result, ResolvedOperatorRate{
+			Operator:       op,
+			MaskingRate:    mRate,
+			NonMaskingRate: nmRate,
+			RateSource:     source,
+		})
+	}
+	return result
+}
+
+func (r *OperatorRateResolver) resolvePair(op Operator) (*float64, *float64, string) {
+	if r.hasActivePlan {
+		rp, ok := r.overrides[op.ID]
+		if !ok {
+			return nil, nil, "tariff_plan"
+		}
+		return nullFloatPtr(rp.MaskingPrice), nullFloatPtr(rp.NonMaskingPrice), "tariff_plan"
+	}
+
+	m := op.MaskingPrice
+	nm := op.NonMaskingPrice
+	source := "default"
+	if rp, ok := r.overrides[op.ID]; ok {
+		if rp.MaskingPrice.Valid {
+			m = rp.MaskingPrice
+			source = "custom"
+		}
+		if rp.NonMaskingPrice.Valid {
+			nm = rp.NonMaskingPrice
+			source = "custom"
+		}
+	}
+	return nullFloatPtr(m), nullFloatPtr(nm), source
+}
+
+func nullFloatPtr(v sql.NullFloat64) *float64 {
+	if !v.Valid {
+		return nil
+	}
+	val := v.Float64
+	return &val
 }

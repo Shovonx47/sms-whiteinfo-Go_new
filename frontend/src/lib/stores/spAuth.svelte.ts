@@ -13,6 +13,8 @@ export interface SpUser {
 	balance: number;
 	type: string;
 	status: string;
+	is_owner?: boolean;
+	permissions?: string[];
 }
 
 interface SpState {
@@ -44,6 +46,12 @@ function createSpStore() {
 		get balance() {
 			return state.user?.balance ?? 0;
 		},
+		get isOwner() {
+			return state.user?.is_owner === true;
+		},
+		can(permission: string) {
+			return state.user?.is_owner === true || (state.user?.permissions ?? []).includes(permission);
+		},
 
 		async init() {
 			if (state.initialized) return;
@@ -58,8 +66,8 @@ function createSpStore() {
 			}
 
 			try {
-				const res = await spApi.get<{ data: SpUser }>('/api/v1/sp/auth/me');
-				state.user = res.data;
+				const res = await spApi.get<{ data: SpUser; is_owner?: boolean; permissions?: string[] }>('/api/v1/sp/auth/me');
+				state.user = { ...res.data, is_owner: res.is_owner, permissions: res.permissions ?? [] };
 			} catch (e) {
 				if (e instanceof SpApiError && e.status === 401) {
 					spApi.clearToken();
@@ -84,11 +92,11 @@ function createSpStore() {
 					spApi.setToken(res.data.token, remember);
 				}
 
-				if (res?.data?.user) {
-					state.user = res.data.user;
-				} else {
-					const meRes = await spApi.get<{ data: SpUser }>('/api/v1/sp/auth/me');
-					state.user = meRes.data;
+				try {
+					const meRes = await spApi.get<{ data: SpUser; is_owner?: boolean; permissions?: string[] }>('/api/v1/sp/auth/me');
+					state.user = { ...meRes.data, is_owner: meRes.is_owner, permissions: meRes.permissions ?? [] };
+				} catch {
+					state.user = res?.data?.user ?? null;
 				}
 
 				return { success: true };
@@ -122,8 +130,8 @@ function createSpStore() {
 
 		async refreshUser() {
 			try {
-				const res = await spApi.get<{ data: SpUser }>('/api/v1/sp/auth/me');
-				state.user = res.data;
+				const res = await spApi.get<{ data: SpUser; is_owner?: boolean; permissions?: string[] }>('/api/v1/sp/auth/me');
+				state.user = { ...res.data, is_owner: res.is_owner, permissions: res.permissions ?? [] };
 			} catch {
 				// ignore
 			}

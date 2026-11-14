@@ -4,7 +4,9 @@
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import Navbar from '$lib/components/Navbar.svelte';
 	import { page } from '$app/stores';
+	import { browser } from '$app/environment';
 	import { onMount } from 'svelte';
+	import type { User } from '$lib/stores/auth.svelte.js';
 
 	let { children } = $props();
 	let sidebarCollapsed = $state(false);
@@ -57,10 +59,72 @@
 
 	let currentTitle = $derived(pageTitles[$page.url.pathname] ?? 'SMS Whiteinfo');
 
+	// Mirrors HandleCustomerApproval + HandleCustomerKyc: restricted accounts can
+	// only see their status/KYC page, and approved accounts leave status pages.
+	const KYC_PATHS = ['/account/kyc', '/customer/kyc'];
+	const DASHBOARD_PATHS = ['/', '/customer'];
+	const STATUS_PATHS = ['/account/pending', '/account/rejected', '/account/banned'];
+
+	function guardTarget(user: User, path: string): string | null {
+		const isKycPath = KYC_PATHS.includes(path);
+
+		// Admin-created pending customers are never trapped on the pending page.
+		if (user.status === 'pending' && user.created_by_admin) {
+			return null;
+		}
+
+		const statusPage = user.status === 'pending'
+			? '/account/pending'
+			: user.status === 'rejected'
+				? '/account/rejected'
+				: user.status === 'banned'
+					? '/account/banned'
+					: null;
+
+		// Pending/rejected/banned customers may still open the dashboard and KYC
+		// page; every other portal page sends them to their status page.
+		if (statusPage) {
+			const allowed = [...DASHBOARD_PATHS, ...KYC_PATHS, statusPage];
+			if (!allowed.includes(path)) {
+				return statusPage;
+			}
+		}
+
+		// KYC documents are required until the first submission.
+		if (!user.created_by_admin && !user.front_nid && !isKycPath) {
+			return '/account/kyc';
+		}
+
+		// SP-created customers flagged for resubmission must fix their documents.
+		if (user.created_by_sp && user.kyc_status === 'resubmit_required' && !isKycPath) {
+			return '/account/kyc';
+		}
+
+		// Approved customers do not stay on status pages.
+		if (!statusPage && STATUS_PATHS.includes(path)) {
+			return '/customer';
+		}
+
+		return null;
+	}
+
 	onMount(async () => {
 		await auth.init();
 		if (!auth.isLoggedIn) {
 			goto('/login');
+		}
+	});
+
+	$effect(() => {
+		if (!browser) return;
+
+		const path = $page.url.pathname;
+		const user = auth.user;
+		if (!auth.initialized || !user) return;
+
+		const target = guardTarget(user, path);
+		if (target && target !== path) {
+			goto(target, { replaceState: true });
 		}
 	});
 </script>

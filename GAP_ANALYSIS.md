@@ -355,3 +355,18 @@ SP pages: Dashboard, KycVerificationPage, LiveQueuePage, Reports, Wallet (plus p
 
 Console commands: `messages:poll-delivery`, `queue:purge-stale`, `batches:send-scheduled`, `campaigns:send-scheduled` (every minute); `telescope:prune`, `disposable:update` (daily).
 Jobs: `ProcessBatchJob`, `PollMessageDeliveryJob`, `ProcessCampaignJob`, `SendSmsJob`, `SendWebhookJob`, `ProcessDepositJob`.
+
+## Phase 0 implementation log (2026-11-14)
+
+- **P0-1 Registration/OTP/KYC**: multipart + JSON registration, public signup OTP (`/otp/send`, `/otp/verify`), old duplicate/soft-delete rules, private KYC paths, pending/under-review state, plan/slug assignment, reseller plan validation. Signup OTP now tries `signup_register_gateways` first, then OTP gateways.
+- **P0-2 Portal gating**: pending/rejected/banned status pages; dashboard + KYC remain reachable for restricted accounts (matches `HandleCustomerApproval`); first KYC is locked server-side, SP-created resubmissions move to `awaiting_sp_verification`, regular submissions to `under_review`.
+- **P0-3 Developer API**: restored `{status, code, message}` envelope, API code table, `phone`/`to`/`message` aliases, GET/POST sends, schedule/scheduled_at, `template_id` approval bypass, `{id}|{token}` auth, `api_access`/status checks, IP whitelist policy with portal bypass and blocked-message support, batch/DLR fields and whitelist API.
+- **P0-4 Broken routes**: contact update, group member listing, admin IP approval route, real backup download.
+- **P0-5 Fabricated data**: real backup files from `mysqldump`, persisted maintenance mode (enforced in customer/SP APIs), real queue/capacity/peak-TPS values, real security counts, API code table matches the old enum.
+- **P0-6 Notifications**: Laravel `notifications` table is read/written; customer and admin bells poll every 30s, list/read/read-all endpoints, batch completion/failure, deposits, KYC results/resubmission events.
+- **P0-7 Approval gating**: portal quick/bulk/scheduled batches now honor `sms_auto_approved` and wait for admin approval.
+- **SP permissions**: employee tokens now inherit the owner's data scope and are checked against `sp_roles.permissions` (`customers.view`, `billing.view`, `billing.manage`, `messaging.view`); owners retain full access.
+
+Assumptions recorded: maintenance is enforced on customer + SP APIs but the admin API remains reachable for recovery; backup storage is local (`BACKUP_PATH`, default `storage/backups`) with FTPS/Drive targets still outstanding; admin notifications only appear for events that write them (no synthetic entries).
+- **P0-6 SP portal**: added customer create/edit/delete/restore/export + plan assignment and negative (reversal) balance distributions with the old customer-balance/SP-balance checks; SP-first KYC review (verify → `under_review`, send back → `resubmit_required` with requested fields and customer notification); employees CRUD; roles CRUD with the full old permission list enforced server-side; sender requests; tariff plans with per-operator masking/non-masking rates and archive; deposits; live queue; reports (traffic, customer spend, distributions, top customers); profile and password. SP owners keep full access; employees inherit the owner's data scope and are limited to their role permissions. Admin notifications are now written for new KYC submissions and SP verification.
+- Known SP gaps still open: app-based MFA and self-service password reset for the SP login, and provider-cost/margin reporting is shown as customer spend + distributions instead of estimating wholesale cost.

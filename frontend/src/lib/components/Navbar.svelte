@@ -1,6 +1,18 @@
 <script lang="ts">
 	import { auth } from '$lib/stores/auth.svelte.js';
+	import { api } from '$lib/api.js';
 	import { goto } from '$app/navigation';
+	import { onMount } from 'svelte';
+
+	interface NotificationItem {
+		id: string;
+		title: string;
+		body: string;
+		status: string;
+		url?: string;
+		read_at: string | null;
+		created_at: string;
+	}
 
 	interface Props {
 		title?: string;
@@ -11,6 +23,59 @@
 	let { title = '', onDepositClick, onToggleSidebar }: Props = $props();
 
 	let userMenuOpen = $state(false);
+	let notificationsOpen = $state(false);
+	let notifications = $state<NotificationItem[]>([]);
+	let unreadCount = $state(0);
+	let loadingNotifications = $state(false);
+
+	async function loadNotifications() {
+		if (!auth.isLoggedIn) return;
+		loadingNotifications = true;
+		try {
+			const res = await api.get<{ data: NotificationItem[]; unread_count: number }>('/api/v1/customer/notifications');
+			notifications = res.data ?? [];
+			unreadCount = res.unread_count ?? 0;
+		} catch {
+			notifications = [];
+			unreadCount = 0;
+		} finally {
+			loadingNotifications = false;
+		}
+	}
+
+	async function openNotification(item: NotificationItem) {
+		try {
+			if (!item.read_at) {
+				await api.post(`/api/v1/customer/notifications/${item.id}/read`);
+				item.read_at = new Date().toISOString();
+				unreadCount = Math.max(0, unreadCount - 1);
+			}
+		} catch {
+			// Keep the notification visible even if the read marker fails.
+		}
+
+		notificationsOpen = false;
+		if (item.url) {
+			goto(item.url);
+		}
+	}
+
+	async function markAllRead() {
+		try {
+			await api.post('/api/v1/customer/notifications/read-all');
+			notifications = notifications.map((item) => ({ ...item, read_at: item.read_at ?? new Date().toISOString() }));
+			unreadCount = 0;
+		} catch {
+			// Leave the current list intact.
+		}
+	}
+
+	onMount(() => {
+		loadNotifications();
+		const timer = setInterval(loadNotifications, 30000);
+
+		return () => clearInterval(timer);
+	});
 
 	function formatBalance(balance: number): string {
 		return new Intl.NumberFormat('en-US', {
@@ -32,6 +97,9 @@
 		const target = e.target as HTMLElement;
 		if (!target.closest('[data-user-menu]')) {
 			userMenuOpen = false;
+		}
+		if (!target.closest('[data-notification-menu]')) {
+			notificationsOpen = false;
 		}
 	}
 
@@ -103,19 +171,60 @@
 		</a>
 
 		<!-- Notification Bell -->
-		<div class="relative">
+		<div class="relative" data-notification-menu>
 			<button
 				type="button"
+				onclick={() => (notificationsOpen = !notificationsOpen)}
 				class="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-900 transition dark:text-gray-400 dark:hover:bg-gray-800 cursor-pointer"
 				title="Notifications"
 			>
 				<svg class="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
 					<path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
 				</svg>
-				<span class="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-teal-100 text-[9px] font-bold text-teal-700 dark:bg-teal-900 dark:text-teal-300">
-					3
-				</span>
+				{#if unreadCount > 0}
+					<span class="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-teal-100 px-1 text-[9px] font-bold text-teal-700 dark:bg-teal-900 dark:text-teal-300">
+						{unreadCount > 99 ? '99+' : unreadCount}
+					</span>
+				{/if}
 			</button>
+
+			{#if notificationsOpen}
+				<div class="absolute right-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800">
+					<div class="flex items-center justify-between border-b border-gray-100 px-4 py-2.5 dark:border-gray-700">
+						<p class="text-xs font-semibold text-gray-900 dark:text-gray-100">Notifications</p>
+						{#if unreadCount > 0}
+							<button type="button" onclick={markAllRead} class="text-[11px] font-medium text-teal-700 hover:underline dark:text-teal-400">
+								Mark all read
+							</button>
+						{/if}
+					</div>
+
+					<div class="max-h-80 overflow-y-auto">
+						{#if loadingNotifications && notifications.length === 0}
+							<p class="px-4 py-6 text-center text-xs text-gray-400">Loading notifications…</p>
+						{:else if notifications.length === 0}
+							<p class="px-4 py-6 text-center text-xs text-gray-400">No notifications yet.</p>
+						{:else}
+							{#each notifications as item (item.id)}
+								<button
+									type="button"
+									onclick={() => openNotification(item)}
+									class="block w-full border-b border-gray-50 px-4 py-3 text-left transition last:border-0 hover:bg-gray-50 dark:border-gray-700/50 dark:hover:bg-gray-700/40 {item.read_at ? 'opacity-70' : ''}"
+								>
+									<div class="flex items-start gap-2">
+										<span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full {item.read_at ? 'bg-transparent' : item.status === 'danger' ? 'bg-red-500' : item.status === 'warning' ? 'bg-amber-500' : 'bg-teal-500'}"></span>
+										<div class="min-w-0">
+											<p class="text-xs font-semibold text-gray-900 dark:text-gray-100">{item.title}</p>
+											<p class="mt-0.5 text-[11px] leading-snug text-gray-500 dark:text-gray-400">{item.body}</p>
+											<p class="mt-1 text-[10px] text-gray-400">{new Date(item.created_at).toLocaleString()}</p>
+										</div>
+									</div>
+								</button>
+							{/each}
+						{/if}
+					</div>
+				</div>
+			{/if}
 		</div>
 
 		<!-- Apps Square -->

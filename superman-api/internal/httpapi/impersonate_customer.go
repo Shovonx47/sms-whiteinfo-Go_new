@@ -64,4 +64,3 @@ func (server *Server) impersonateCustomer(context fiber.Ctx) error {
 
 	return context.JSON(fiber.Map{"data": fiber.Map{"token": token, "expires_at": expiresAt.Format(time.RFC3339)}})
 }
-

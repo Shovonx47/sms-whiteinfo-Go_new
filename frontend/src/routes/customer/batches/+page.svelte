@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { api } from '$lib/api.js';
-	import { exportToCsv } from '$lib/utils/export.js';
 	import { toast } from '$lib/stores/toast.svelte.js';
 	import { onMount } from 'svelte';
 
@@ -48,6 +47,7 @@
 	// Export modal
 	let exportModalOpen = $state(false);
 	let exportFormat = $state<'excel' | 'pdf'>('excel');
+	let exporting = $state(false);
 
 	// View detail modal
 	let selectedLog = $state<MessageLog | null>(null);
@@ -95,30 +95,31 @@
 		load(1);
 	}
 
-	function handleExport() {
-		exportModalOpen = false;
-		if (logs.length === 0) {
-			toast.info('No Records', 'There are no message logs to export.');
-			return;
-		}
+	async function handleExport() {
+		if (exporting) return;
+		exporting = true;
+		try {
+			const fmt = exportFormat === 'pdf' ? 'pdf' : 'csv';
+			const params = new URLSearchParams({ format: fmt });
+			if (search.trim()) params.set('search', search.trim());
+			if (selectedSender) params.set('sender_id', selectedSender);
+			if (selectedStatus && selectedStatus !== 'all') params.set('status', selectedStatus);
+			if (createdFrom) params.set('created_from', createdFrom);
+			if (createdUntil) params.set('created_until', createdUntil);
 
-		if (exportFormat === 'excel') {
-			const rows = logs.map((l) => ({
-				'Recipient Number': l.to,
-				'Sender ID': l.sender_id,
-				'Content': l.body,
-				'SMS Type': l.sms_type,
-				'Cost (BDT)': l.cost,
-				'Previous Balance': l.previous_balance,
-				'Parts': l.parts,
-				'Status': l.status,
-				'Date & Time': new Date(l.created_at).toLocaleString()
-			}));
-			exportToCsv(`sent-message-logs-${new Date().toISOString().slice(0, 10)}.csv`, rows);
-			toast.success('Export Complete', 'Downloaded Sent Message Logs CSV.');
-		} else {
-			// Print or PDF export preview
-			window.print();
+			const blob = await api.download(`/api/v1/customer/batches/export?${params}`);
+			const url = URL.createObjectURL(blob);
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = `sent-message-logs-${new Date().toISOString().slice(0, 10)}.${fmt}`;
+			link.click();
+			URL.revokeObjectURL(url);
+			exportModalOpen = false;
+			toast.success('Export Complete', `Downloaded Sent Message Logs ${fmt.toUpperCase()}.`);
+		} catch (err) {
+			toast.error('Export Failed', err instanceof Error ? err.message : 'Could not export sent message logs.');
+		} finally {
+			exporting = false;
 		}
 	}
 
@@ -459,9 +460,10 @@
 				<button
 					type="button"
 					onclick={handleExport}
-					class="rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition cursor-pointer"
+					disabled={exporting}
+					class="rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 disabled:opacity-50 transition cursor-pointer"
 				>
-					Download Report
+					{exporting ? 'Exporting…' : 'Download Report'}
 				</button>
 			</div>
 		</div>

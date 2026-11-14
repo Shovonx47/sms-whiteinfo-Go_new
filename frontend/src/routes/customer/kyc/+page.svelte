@@ -1,21 +1,27 @@
 <script lang="ts">
 	import { auth } from '$lib/stores/auth.svelte.js';
-	import { api } from '$lib/api.js';
+	import { api, ApiError } from '$lib/api.js';
 	import { toast } from '$lib/stores/toast.svelte.js';
-	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { onDestroy, onMount, tick } from 'svelte';
+
+	interface KycUser {
+		id: number;
+		name: string;
+		email: string;
+		kyc_status: string;
+		nid_number?: string | null;
+		trade_license_number?: string | null;
+		kyc_rejected_reason?: string | null;
+	}
 
 	interface KycData {
-		user: {
-			id: number;
-			name: string;
-			email: string;
-			kyc_status: string;
-			nid_number?: string;
-			trade_license_number?: string;
-			kyc_rejected_reason?: string;
-		};
+		user: KycUser;
 		is_resubmission: boolean;
-		requested_fields: string[] | null;
+		is_locked: boolean;
+		can_submit: boolean;
+		has_nid_on_record: boolean;
+		requested_fields: string[];
 		title: string;
 		heading: string;
 		subheading: string;
@@ -23,51 +29,54 @@
 
 	let kycData = $state<KycData | null>(null);
 	let loading = $state(true);
+	let loadError = $state('');
 	let submitting = $state(false);
 
-	// Form fields
 	let nidNumber = $state('');
 	let tradeLicenseNumber = $state('');
 	let frontNidFile = $state<File | null>(null);
 	let backNidFile = $state<File | null>(null);
-	let livePhotoFile = $state<File | null>(null);
 	let tradeLicenseFile = $state<File | null>(null);
-
-	// Previews
 	let frontPreview = $state<string | null>(null);
 	let backPreview = $state<string | null>(null);
+
+	let cameraOpen = $state(false);
+	let cameraError = $state('');
 	let livePreview = $state<string | null>(null);
+	let videoElement: HTMLVideoElement | undefined = $state();
+	let mediaStream: MediaStream | null = null;
+
+	const isResubmission = $derived(kycData?.is_resubmission ?? false);
+	const canSubmit = $derived(kycData?.can_submit ?? false);
+	const isLocked = $derived(kycData?.is_locked ?? false);
+
+	function showField(field: string): boolean {
+		if (!kycData || !kycData.is_resubmission) return true;
+		const requested = kycData.requested_fields ?? [];
+		if (requested.length === 0) return true;
+
+		return requested.includes(field);
+	}
 
 	async function loadKyc() {
 		loading = true;
+		loadError = '';
 		try {
 			const res = await api.get<{ data: KycData }>('/api/v1/customer/kyc');
 			kycData = res.data;
-			if (res.data.user.nid_number) nidNumber = res.data.user.nid_number;
-			if (res.data.user.trade_license_number) tradeLicenseNumber = res.data.user.trade_license_number;
-		} catch {
-			// Fallback local status
-			kycData = {
-				user: {
-					id: auth.user?.id ?? 1,
-					name: auth.user?.name ?? 'Customer',
-					email: auth.user?.email ?? '',
-					kyc_status: auth.user?.kyc_status ?? 'under_review'
-				},
-				is_resubmission: false,
-				requested_fields: null,
-				title: 'KYC Document Verification',
-				heading: 'Account Compliance & BTRC Verification',
-				subheading: 'Please upload official National ID documents to comply with Bangladesh Telecommunication Regulatory Commission guidelines.'
-			};
+			nidNumber = res.data.user.nid_number ?? '';
+			tradeLicenseNumber = res.data.user.trade_license_number ?? '';
+		} catch (e) {
+			loadError = e instanceof ApiError ? e.message : 'Unable to load your KYC information. Please try again.';
 		} finally {
 			loading = false;
 		}
 	}
 
 	onMount(() => loadKyc());
+	onDestroy(stopCamera);
 
-	function handleFileChange(e: Event, type: 'front' | 'back' | 'live' | 'trade') {
+	function handleFileChange(e: Event, type: 'front' | 'back' | 'trade') {
 		const input = e.target as HTMLInputElement;
 		const file = input.files?.[0];
 		if (!file) return;
@@ -81,22 +90,78 @@
 			} else if (type === 'back') {
 				backNidFile = file;
 				backPreview = url;
-			} else if (type === 'live') {
-				livePhotoFile = file;
-				livePreview = url;
-			} else if (type === 'trade') {
+			} else {
 				tradeLicenseFile = file;
 			}
 		};
 		reader.readAsDataURL(file);
 	}
 
+	async function openCamera() {
+		cameraError = '';
+		cameraOpen = true;
+
+		try {
+			if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+				throw new Error('Camera access is not supported by your browser or requires HTTPS.');
+			}
+			const stream = await navigator.mediaDevices.getUserMedia({
+				video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+				audio: false
+			});
+			mediaStream = stream;
+			await tick();
+			if (videoElement) {
+				videoElement.srcObject = stream;
+				await videoElement.play();
+			}
+		} catch (err: unknown) {
+			cameraError = err instanceof Error ? err.message : 'Unable to access camera. Please allow camera permissions.';
+		}
+	}
+
+	function stopCamera() {
+		if (mediaStream) {
+			mediaStream.getTracks().forEach((track) => track.stop());
+			mediaStream = null;
+		}
+		cameraOpen = false;
+	}
+
+	function capturePhoto() {
+		if (!videoElement) return;
+
+		const canvas = document.createElement('canvas');
+		canvas.width = videoElement.videoWidth || 640;
+		canvas.height = videoElement.videoHeight || 480;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return;
+
+		ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+		livePreview = canvas.toDataURL('image/jpeg', 0.9);
+		stopCamera();
+	}
+
 	async function handleSubmit(e: SubmitEvent) {
 		e.preventDefault();
 
-		if (!nidNumber.trim()) {
-			toast.error('Validation Error', 'National ID Number is required.');
-			return;
+		if (!isResubmission) {
+			if (!nidNumber.trim()) {
+				toast.error('Validation Error', 'National ID Number is required.');
+				return;
+			}
+			if (!frontNidFile) {
+				toast.error('Validation Error', 'The front side of your NID is required.');
+				return;
+			}
+			if (!backNidFile) {
+				toast.error('Validation Error', 'The back side of your NID is required.');
+				return;
+			}
+			if (!livePreview) {
+				toast.error('Validation Error', 'Please capture a live photo before submitting.');
+				return;
+			}
 		}
 
 		submitting = true;
@@ -105,36 +170,58 @@
 			formData.append('nid_number', nidNumber.trim());
 			if (frontNidFile) formData.append('front_nid', frontNidFile);
 			if (backNidFile) formData.append('back_nid', backNidFile);
-			if (livePhotoFile) formData.append('live_photo', livePhotoFile);
+			if (livePreview) formData.append('live_photo', livePreview);
 			if (tradeLicenseNumber.trim()) formData.append('trade_license_number', tradeLicenseNumber.trim());
 			if (tradeLicenseFile) formData.append('trade_license_file', tradeLicenseFile);
 
-			// Direct fetch for multipart/form-data
+			const token = api.getToken();
 			const res = await fetch('/api/v1/customer/kyc', {
 				method: 'POST',
 				body: formData,
 				credentials: 'include',
 				headers: {
 					Accept: 'application/json',
-					'X-Requested-With': 'XMLHttpRequest'
+					'X-Requested-With': 'XMLHttpRequest',
+					...(token ? { Authorization: `Bearer ${token}` } : {})
 				}
 			});
 
 			if (!res.ok) {
 				const errorData = await res.json().catch(() => ({}));
-				throw new Error(errorData.message ?? 'KYC submission failed');
+				let message = errorData.message ?? 'KYC submission failed';
+				if (errorData.errors) {
+					const firstKey = Object.keys(errorData.errors)[0];
+					if (firstKey && errorData.errors[firstKey][0]) {
+						message = errorData.errors[firstKey][0];
+					}
+				}
+				throw new Error(message);
 			}
 
+			await auth.refresh();
 			toast.success('KYC Submitted', 'Your documents have been submitted for review.');
-			if (kycData) {
-				kycData.user.kyc_status = 'under_review';
-				kycData.is_resubmission = false;
-			}
+			goto('/customer');
 		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : 'KYC submission failed';
-			toast.error('Submission Failed', msg);
+			toast.error('Submission Failed', err instanceof Error ? err.message : 'KYC submission failed');
 		} finally {
 			submitting = false;
+		}
+	}
+
+	function statusLabel(status: string): string {
+		switch (status) {
+			case 'verified':
+				return 'KYC Verified';
+			case 'under_review':
+				return 'Under Review';
+			case 'awaiting_sp_verification':
+				return 'Awaiting Reseller Review';
+			case 'resubmit_required':
+				return 'Action Required';
+			case 'rejected':
+				return 'Rejected';
+			default:
+				return 'Unsubmitted';
 		}
 	}
 </script>
@@ -143,201 +230,249 @@
 	<title>KYC Documents - White INFO</title>
 </svelte:head>
 
-<div class="space-y-6 max-w-4xl">
-	<!-- Page Header -->
-	<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-		<div>
-			<h1 class="text-xl font-bold tracking-tight text-gray-950 dark:text-white">KYC Verification Center</h1>
-			<p class="text-xs text-gray-500 dark:text-gray-400">Bangladesh Telecommunication Regulatory Commission (BTRC) identity compliance.</p>
-		</div>
-
-		<!-- Status Badge -->
-		{#if kycData}
-			{@const status = kycData.user.kyc_status}
-			<span class="inline-flex items-center gap-1.5 self-start rounded-full px-3 py-1 text-xs font-semibold
-				{status === 'approved' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-400 dark:border-emerald-500/30' :
-				 status === 'under_review' ? 'bg-teal-50 text-teal-700 border border-teal-200 dark:bg-cyan-500/15 dark:text-cyan-400 dark:border-cyan-500/30' :
-				 status === 'resubmit_required' ? 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-500/15 dark:text-amber-400 dark:border-amber-500/30' :
-				 'bg-gray-100 text-gray-600 border border-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700'}"
-			>
-				<span class="h-2 w-2 rounded-full {status === 'approved' ? 'bg-emerald-500' : status === 'under_review' ? 'bg-teal-500 animate-pulse' : 'bg-amber-500'}"></span>
-				{status === 'approved' ? 'KYC Verified' : status === 'under_review' ? 'Under Review' : status === 'resubmit_required' ? 'Action Required' : 'Unsubmitted'}
-			</span>
-		{/if}
-	</div>
-
-	<!-- Status Card / Alert -->
-	{#if kycData?.is_resubmission}
-		<div class="rounded-xl border border-amber-200 bg-amber-50 p-5 text-amber-900 shadow-xs dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-			<div class="flex items-start gap-3">
-				<svg class="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
-				</svg>
-				<div class="text-xs space-y-1">
-					<p class="font-bold text-sm text-amber-950 dark:text-amber-300">Resubmission Requested by Compliance Officer</p>
-					<p class="text-amber-800 dark:text-amber-200">{kycData.subheading}</p>
-					{#if kycData.requested_fields && kycData.requested_fields.length > 0}
-						<p class="font-medium text-amber-900 dark:text-amber-300 pt-1">
-							Fields needing update: <span class="font-mono">{kycData.requested_fields.join(', ')}</span>
-						</p>
-					{/if}
-				</div>
+<div class="max-w-4xl space-y-6">
+	{#if loading}
+		<div class="flex items-center justify-center py-24">
+			<div class="flex flex-col items-center gap-3 text-gray-500 dark:text-gray-400">
+				<div class="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-teal-600 dark:border-gray-700 dark:border-t-primary-500"></div>
+				<p class="text-sm">Loading KYC information…</p>
 			</div>
 		</div>
-	{:else if kycData?.user.kyc_status === 'approved'}
-		<div class="rounded-xl border border-emerald-200 bg-emerald-50 p-5 text-emerald-900 shadow-xs dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200">
-			<div class="flex items-start gap-3">
-				<svg class="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400 mt-0.5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-				</svg>
-				<div class="text-xs space-y-1">
-					<p class="font-bold text-sm text-emerald-950 dark:text-emerald-300">Identity Verified & Compliant</p>
-					<p>Your account has been fully verified and approved. All maskings, high-throughput bulk SMS routes, and API dispatch are unlocked.</p>
-				</div>
-			</div>
-		</div>
-	{/if}
-
-	<!-- Upload Form -->
-	<form onsubmit={handleSubmit} class="space-y-6">
-		<!-- Section 1: National ID Info -->
-		<div class="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-5 dark:border-gray-800 dark:bg-gray-900">
-			<h2 class="text-sm font-bold text-gray-950 dark:text-white">1. National Identity Card (Smart NID / Old NID)</h2>
-
-			<div>
-				<label for="nid-number" class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
-					NID Number (10, 13, or 17 digits) <span class="text-red-500">*</span>
-				</label>
-				<input
-					id="nid-number"
-					type="text"
-					bind:value={nidNumber}
-					placeholder="e.g. 19852692510000123"
-					class="w-full font-mono rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 shadow-xs placeholder-gray-400 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:placeholder-gray-500"
-				/>
-			</div>
-
-			<div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
-				<!-- Front Side -->
-				<div>
-					<span class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
-						NID Front Side <span class="text-red-500">*</span>
-					</span>
-					<div class="relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50/50 p-5 text-center transition hover:border-teal-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800/40 dark:hover:border-teal-500">
-						{#if frontPreview}
-							<img src={frontPreview} alt="NID Front" class="max-h-36 rounded-lg object-contain" />
-							<p class="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">File selected: {frontNidFile?.name}</p>
-						{:else}
-							<svg class="h-8 w-8 text-gray-400 dark:text-gray-500" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-								<path stroke-linecap="round" stroke-linejoin="round" d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Zm6-10.125a1.875 1.875 0 1 1-3.75 0 1.875 1.875 0 0 1 3.75 0Zm1.294 6.336a6.721 6.721 0 0 1-3.17.789 6.721 6.721 0 0 1-3.168-.789 3.376 3.376 0 0 1 6.338 0Z" />
-							</svg>
-							<span class="mt-2 text-xs font-semibold text-gray-700 dark:text-gray-300">Click or Drag NID Front</span>
-							<span class="text-[10px] text-gray-500">JPG, PNG, or PDF up to 5MB</span>
-						{/if}
-						<input
-							type="file"
-							accept="image/*,.pdf"
-							onchange={(e) => handleFileChange(e, 'front')}
-							class="absolute inset-0 cursor-pointer opacity-0"
-						/>
-					</div>
-				</div>
-
-				<!-- Back Side -->
-				<div>
-					<span class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
-						NID Back Side <span class="text-red-500">*</span>
-					</span>
-					<div class="relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50/50 p-5 text-center transition hover:border-teal-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800/40 dark:hover:border-teal-500">
-						{#if backPreview}
-							<img src={backPreview} alt="NID Back" class="max-h-36 rounded-lg object-contain" />
-							<p class="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">File selected: {backNidFile?.name}</p>
-						{:else}
-							<svg class="h-8 w-8 text-gray-400 dark:text-gray-500" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-								<path stroke-linecap="round" stroke-linejoin="round" d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Zm6-10.125a1.875 1.875 0 1 1-3.75 0 1.875 1.875 0 0 1 3.75 0Zm1.294 6.336a6.721 6.721 0 0 1-3.17.789 6.721 6.721 0 0 1-3.168-.789 3.376 3.376 0 0 1 6.338 0Z" />
-							</svg>
-							<span class="mt-2 text-xs font-semibold text-gray-700 dark:text-gray-300">Click or Drag NID Back</span>
-							<span class="text-[10px] text-gray-500">JPG, PNG, or PDF up to 5MB</span>
-						{/if}
-						<input
-							type="file"
-							accept="image/*,.pdf"
-							onchange={(e) => handleFileChange(e, 'back')}
-							class="absolute inset-0 cursor-pointer opacity-0"
-						/>
-					</div>
-				</div>
-			</div>
-		</div>
-
-		<!-- Section 2: Live Photo Verification -->
-		<div class="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-4 dark:border-gray-800 dark:bg-gray-900">
-			<h2 class="text-sm font-bold text-gray-950 dark:text-white">2. Live Selfie / Portrait Photo</h2>
-			<p class="text-xs text-gray-500 dark:text-gray-400">Upload a clear passport-style selfie or photo of the applicant facing the camera.</p>
-
-			<div class="relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50/50 p-6 text-center transition hover:border-teal-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800/40 dark:hover:border-teal-500">
-				{#if livePreview}
-					<img src={livePreview} alt="Live portrait preview" class="h-32 w-32 rounded-full object-cover border-2 border-teal-600" />
-					<p class="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">Photo selected: {livePhotoFile?.name}</p>
-				{:else}
-					<svg class="h-10 w-10 text-gray-400 dark:text-gray-500" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
-						<path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
-					</svg>
-					<span class="mt-2 text-xs font-semibold text-gray-700 dark:text-gray-300">Upload Applicant Photo</span>
-					<span class="text-[10px] text-gray-500">Good lighting, clear face without sunglasses</span>
-				{/if}
-				<input
-					type="file"
-					accept="image/*"
-					onchange={(e) => handleFileChange(e, 'live')}
-					class="absolute inset-0 cursor-pointer opacity-0"
-				/>
-			</div>
-		</div>
-
-		<!-- Section 3: Trade License (Optional/Corporate) -->
-		<div class="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-4 dark:border-gray-800 dark:bg-gray-900">
-			<div class="flex items-center justify-between">
-				<h2 class="text-sm font-bold text-gray-950 dark:text-white">3. Trade License (Required for Businesses)</h2>
-				<span class="rounded bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-gray-600 dark:bg-gray-800 dark:text-gray-400">Optional for Personal</span>
-			</div>
-
-			<div>
-				<label for="trade-number" class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
-					Trade License Number
-				</label>
-				<input
-					id="trade-number"
-					type="text"
-					bind:value={tradeLicenseNumber}
-					placeholder="e.g. TRAD/DNCC/12345/2026"
-					class="w-full font-mono rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 shadow-xs placeholder-gray-400 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:placeholder-gray-500"
-				/>
-			</div>
-
-			<div>
-				<span class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
-					Trade License Document
-				</span>
-				<input
-					type="file"
-					accept="image/*,.pdf"
-					onchange={(e) => handleFileChange(e, 'trade')}
-					class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-xs text-gray-700 shadow-xs file:mr-3 file:rounded-md file:border-0 file:bg-gray-100 file:px-3 file:py-1 file:text-xs file:font-semibold file:text-gray-700 hover:file:bg-gray-200 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:file:bg-gray-700 dark:file:text-gray-200 dark:hover:file:bg-gray-600"
-				/>
-			</div>
-		</div>
-
-		<!-- Submit Button -->
-		<div class="flex items-center justify-end gap-3 pt-2">
+	{:else if loadError}
+		<div class="rounded-xl border border-red-200 bg-red-50 p-6 dark:border-red-500/30 dark:bg-red-500/10">
+			<p class="text-sm font-semibold text-red-800 dark:text-red-300">KYC information unavailable</p>
+			<p class="mt-1 text-xs text-red-700 dark:text-red-300">{loadError}</p>
 			<button
-				type="submit"
-				disabled={submitting}
-				class="rounded-lg bg-teal-600 px-6 py-2.5 text-sm font-semibold text-white shadow-xs transition hover:bg-teal-500 disabled:opacity-50"
+				type="button"
+				onclick={loadKyc}
+				class="mt-4 rounded-lg bg-red-600 px-4 py-2 text-xs font-semibold text-white hover:bg-red-500"
 			>
-				{submitting ? 'Submitting Documents...' : 'Submit Verification Request'}
+				Try again
 			</button>
 		</div>
-	</form>
+	{:else if kycData}
+		<div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+			<div>
+				<h1 class="text-xl font-bold tracking-tight text-gray-950 dark:text-white">{kycData.title}</h1>
+				<p class="mt-1 text-sm font-medium text-gray-700 dark:text-gray-300">{kycData.heading}</p>
+				<p class="mt-1 max-w-2xl text-xs text-gray-500 dark:text-gray-400">{kycData.subheading}</p>
+			</div>
+
+			<span class="inline-flex items-center gap-1.5 self-start rounded-full border border-gray-200 bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
+				<span class="h-2 w-2 rounded-full bg-teal-500"></span>
+				{statusLabel(kycData.user.kyc_status)}
+			</span>
+		</div>
+
+		{#if isResubmission && kycData.requested_fields.length > 0}
+			<div class="rounded-xl border border-amber-200 bg-amber-50 p-5 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+				<p class="text-sm font-bold text-amber-950 dark:text-amber-300">Resubmission Requested</p>
+				<p class="mt-1">{kycData.subheading}</p>
+				<p class="mt-2 font-medium">
+					Fields needing update:
+					<span class="font-mono">{kycData.requested_fields.join(', ')}</span>
+				</p>
+			</div>
+		{/if}
+
+		{#if isLocked || !canSubmit}
+			<div class="space-y-4 rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+				<h2 class="text-sm font-bold text-gray-950 dark:text-white">Submitted KYC Documents</h2>
+				{#if kycData.user.nid_number}
+					<div>
+						<p class="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">NID Number</p>
+						<p class="mt-1 font-mono text-sm text-gray-900 dark:text-gray-100">{kycData.user.nid_number}</p>
+					</div>
+				{/if}
+				{#if kycData.user.trade_license_number}
+					<div>
+						<p class="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Trade License Number</p>
+						<p class="mt-1 font-mono text-sm text-gray-900 dark:text-gray-100">{kycData.user.trade_license_number}</p>
+					</div>
+				{/if}
+				<p class="text-xs text-gray-500 dark:text-gray-400">
+					You cannot edit, change, or delete submitted KYC information. Please contact support if you need assistance.
+				</p>
+				<a href="/customer" class="inline-flex rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-500">
+					Back to dashboard
+				</a>
+			</div>
+		{:else}
+			<form onsubmit={handleSubmit} class="space-y-6">
+				<div class="space-y-5 rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+					<h2 class="text-sm font-bold text-gray-950 dark:text-white">
+						{isResubmission ? 'Identity Documents — Correction Required' : 'Identity Documents'}
+					</h2>
+
+					{#if showField('nid_number')}
+						<div>
+							<label for="nid-number" class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
+								NID Number {#if !isResubmission}<span class="text-red-500">*</span>{/if}
+							</label>
+							<input
+								id="nid-number"
+								type="text"
+								bind:value={nidNumber}
+								maxlength="30"
+								placeholder="e.g. 1234567890"
+								class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 font-mono text-sm text-gray-900 shadow-xs placeholder-gray-400 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:placeholder-gray-500"
+							/>
+						</div>
+					{/if}
+
+					<div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+						{#if showField('nid_front')}
+							<div>
+								<span class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
+									NID Front Side {#if !isResubmission}<span class="text-red-500">*</span>{/if}
+								</span>
+								<div class="relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50/50 p-5 text-center transition hover:border-teal-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800/40 dark:hover:border-teal-500">
+									{#if frontPreview}
+										<img src={frontPreview} alt="NID front preview" class="max-h-36 rounded-lg object-contain" />
+										<p class="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">Selected: {frontNidFile?.name}</p>
+									{:else}
+										<span class="text-xs font-semibold text-gray-700 dark:text-gray-300">Click to choose NID front</span>
+										<span class="text-[10px] text-gray-500">JPG, PNG, WEBP up to 4MB</span>
+									{/if}
+									<input
+										type="file"
+										accept="image/*"
+										onchange={(e) => handleFileChange(e, 'front')}
+										class="absolute inset-0 cursor-pointer opacity-0"
+									/>
+								</div>
+							</div>
+						{/if}
+
+						{#if showField('nid_back')}
+							<div>
+								<span class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
+									NID Back Side {#if !isResubmission}<span class="text-red-500">*</span>{/if}
+								</span>
+								<div class="relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50/50 p-5 text-center transition hover:border-teal-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800/40 dark:hover:border-teal-500">
+									{#if backPreview}
+										<img src={backPreview} alt="NID back preview" class="max-h-36 rounded-lg object-contain" />
+										<p class="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">Selected: {backNidFile?.name}</p>
+									{:else}
+										<span class="text-xs font-semibold text-gray-700 dark:text-gray-300">Click to choose NID back</span>
+										<span class="text-[10px] text-gray-500">JPG, PNG, WEBP up to 4MB</span>
+									{/if}
+									<input
+										type="file"
+										accept="image/*"
+										onchange={(e) => handleFileChange(e, 'back')}
+										class="absolute inset-0 cursor-pointer opacity-0"
+									/>
+								</div>
+							</div>
+						{/if}
+					</div>
+				</div>
+
+				{#if showField('live_photo')}
+					<div class="space-y-4 rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+						<div>
+							<h2 class="text-sm font-bold text-gray-950 dark:text-white">Live Camera Selfie</h2>
+							<p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+								Take a live selfie using your device camera. Gallery uploads are not accepted.
+								{#if !isResubmission}<span class="text-red-500">*</span>{/if}
+							</p>
+						</div>
+
+						{#if livePreview}
+							<div class="flex flex-col items-center gap-3">
+								<img src={livePreview} alt="Live selfie preview" class="h-32 w-32 rounded-full border-2 border-teal-600 object-cover" />
+								<button
+									type="button"
+									onclick={() => { livePreview = null; openCamera(); }}
+									class="text-xs font-semibold text-teal-700 hover:underline dark:text-teal-400"
+								>
+									Retake photo
+								</button>
+							</div>
+						{:else if cameraOpen}
+							<div class="flex flex-col items-center gap-3">
+								<video bind:this={videoElement} autoplay playsinline muted class="max-h-64 w-full max-w-md rounded-xl bg-black object-cover"></video>
+								{#if cameraError}
+									<p class="text-xs text-red-600 dark:text-red-400">{cameraError}</p>
+								{/if}
+								<div class="flex gap-3">
+									<button
+										type="button"
+										onclick={capturePhoto}
+										disabled={!!cameraError}
+										class="rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-500 disabled:opacity-50"
+									>
+										Capture photo
+									</button>
+									<button
+										type="button"
+										onclick={stopCamera}
+										class="rounded-lg border border-gray-300 px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+									>
+										Cancel
+									</button>
+								</div>
+							</div>
+						{:else}
+							<button
+								type="button"
+								onclick={openCamera}
+								class="flex w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-gray-300 bg-gray-50/50 p-6 text-center transition hover:border-teal-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800/40 dark:hover:border-teal-500"
+							>
+								<span class="text-xs font-semibold text-gray-700 dark:text-gray-300">Open camera and capture selfie</span>
+								<span class="text-[10px] text-gray-500">Camera permission is required</span>
+							</button>
+						{/if}
+					</div>
+				{/if}
+
+				{#if showField('trade_license')}
+					<div class="space-y-4 rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+						<div>
+							<h2 class="text-sm font-bold text-gray-950 dark:text-white">Trade License (Optional)</h2>
+							<p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Upload your trade license if you are a registered business.</p>
+						</div>
+
+						<div>
+							<label for="trade-number" class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
+								Trade License Number
+							</label>
+							<input
+								id="trade-number"
+								type="text"
+								bind:value={tradeLicenseNumber}
+								maxlength="100"
+								placeholder="e.g. TL-2024-123456"
+								class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 font-mono text-sm text-gray-900 shadow-xs placeholder-gray-400 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:placeholder-gray-500"
+							/>
+						</div>
+
+						<div>
+							<span class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">Trade License Document</span>
+							<input
+								type="file"
+								accept="image/*"
+								onchange={(e) => handleFileChange(e, 'trade')}
+								class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-xs text-gray-700 shadow-xs file:mr-3 file:rounded-md file:border-0 file:bg-gray-100 file:px-3 file:py-1 file:text-xs file:font-semibold file:text-gray-700 hover:file:bg-gray-200 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:file:bg-gray-700 dark:file:text-gray-200 dark:hover:file:bg-gray-600"
+							/>
+							{#if tradeLicenseFile}
+								<p class="mt-1 text-xs text-emerald-600 dark:text-emerald-400">Selected: {tradeLicenseFile.name}</p>
+							{/if}
+						</div>
+					</div>
+				{/if}
+
+				<div class="flex items-center justify-end gap-3 pt-2">
+					<button
+						type="submit"
+						disabled={submitting}
+						class="rounded-lg bg-teal-600 px-6 py-2.5 text-sm font-semibold text-white shadow-xs transition hover:bg-teal-500 disabled:opacity-50"
+					>
+						{submitting ? 'Submitting Documents...' : isResubmission ? 'Resubmit KYC Documents' : 'Submit KYC'}
+					</button>
+				</div>
+			</form>
+		{/if}
+	{/if}
 </div>

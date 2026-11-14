@@ -1,6 +1,18 @@
 <script lang="ts">
 	import { adminAuth } from '$lib/stores/adminAuth.svelte.js';
+	import { supermanApi } from '$lib/superman-api.js';
 	import { goto } from '$app/navigation';
+	import { onMount } from 'svelte';
+
+	interface AdminNotification {
+		id: string;
+		title: string;
+		body: string;
+		status: string;
+		url?: string;
+		read_at: string | null;
+		created_at: string;
+	}
 
 	interface Props {
 		onToggleSidebar?: () => void;
@@ -15,12 +27,51 @@
 	let notificationDrawerOpen = $state(false);
 	let searchQuery = $state('');
 
-	const notifications = [
-		{ id: 1, type: 'kyc', title: 'New KYC Request', message: 'A new KYC verification request is pending review.', time: '2 min ago', read: false },
-		{ id: 2, type: 'deposit', title: 'Deposit Approved', message: 'Customer deposit of ৳500 has been approved.', time: '15 min ago', read: false },
-		{ id: 3, type: 'alert', title: 'Low Balance Alert', message: '24 customers have low balance (< ৳10).', time: '1 hr ago', read: true },
-		{ id: 4, type: 'system', title: 'System Update', message: 'All SMS engines are running stably at 100%.', time: '3 hr ago', read: true },
-	];
+	let notifications = $state<AdminNotification[]>([]);
+	let unreadCount = $state(0);
+
+	async function loadNotifications() {
+		try {
+			const res = await supermanApi.get<{ data: AdminNotification[]; unread_count: number }>('/api/v1/superman/notifications');
+			notifications = res.data ?? [];
+			unreadCount = res.unread_count ?? 0;
+		} catch {
+			notifications = [];
+			unreadCount = 0;
+		}
+	}
+
+	async function openNotification(item: AdminNotification) {
+		try {
+			if (!item.read_at) {
+				await supermanApi.post(`/api/v1/superman/notifications/${item.id}/read`);
+				item.read_at = new Date().toISOString();
+				unreadCount = Math.max(0, unreadCount - 1);
+			}
+		} catch {
+			// Keep the notification visible if the read marker fails.
+		}
+
+		notificationDrawerOpen = false;
+		if (item.url) goto(item.url);
+	}
+
+	async function markAllRead() {
+		try {
+			await supermanApi.post('/api/v1/superman/notifications/read-all');
+			notifications = notifications.map((item) => ({ ...item, read_at: item.read_at ?? new Date().toISOString() }));
+			unreadCount = 0;
+		} catch {
+			// Leave the current list intact.
+		}
+	}
+
+	onMount(() => {
+		loadNotifications();
+		const timer = setInterval(loadNotifications, 30000);
+
+		return () => clearInterval(timer);
+	});
 
 	function handleKeydown(e: KeyboardEvent) {
 		if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -237,7 +288,11 @@
 			<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor">
 				<path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
 			</svg>
-			<span class="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-white ring-2 ring-white dark:ring-gray-900">2</span>
+			{#if unreadCount > 0}
+				<span class="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-bold text-white ring-2 ring-white dark:ring-gray-900">
+					{unreadCount > 99 ? '99+' : unreadCount}
+				</span>
+			{/if}
 		</button>
 
 		<!-- Superman User Avatar Dropdown -->
@@ -309,7 +364,9 @@
 					<path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
 				</svg>
 				<h2 class="text-sm font-bold text-gray-900 dark:text-white">Notifications</h2>
-				<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">2 new</span>
+				{#if unreadCount > 0}
+					<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">{unreadCount} new</span>
+				{/if}
 			</div>
 			<button
 				type="button"
@@ -325,21 +382,32 @@
 
 		<!-- Mark all read -->
 		<div class="flex items-center justify-end px-4 py-2 border-b border-gray-50 dark:border-gray-800/50">
-			<button type="button" class="text-[11px] font-semibold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">
-				Mark all as read
-			</button>
+			{#if unreadCount > 0}
+				<button type="button" onclick={markAllRead} class="text-[11px] font-semibold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">
+					Mark all as read
+				</button>
+			{/if}
 		</div>
 
 		<!-- Notification list -->
 		<div class="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
-			{#each notifications as notif}
-				<div class="flex items-start gap-3 px-4 py-3.5 hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors cursor-pointer {!notif.read ? 'bg-emerald-50/60 dark:bg-emerald-950/20' : ''}">
-					<div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full {notif.type === 'kyc' ? 'bg-purple-100 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300' : notif.type === 'deposit' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300' : notif.type === 'alert' ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300' : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'}">
-						{#if notif.type === 'kyc'}
+			{#if notifications.length === 0}
+				<p class="px-4 py-8 text-center text-xs text-gray-400">No notifications yet.</p>
+			{/if}
+			{#each notifications as notif (notif.id)}
+				<div
+					class="flex items-start gap-3 px-4 py-3.5 hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors cursor-pointer {!notif.read_at ? 'bg-emerald-50/60 dark:bg-emerald-950/20' : ''}"
+					onclick={() => openNotification(notif)}
+					role="button"
+					tabindex="0"
+					onkeydown={(e) => e.key === 'Enter' && openNotification(notif)}
+				>
+					<div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full {notif.status === 'warning' ? 'bg-purple-100 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300' : notif.status === 'success' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300' : notif.status === 'danger' ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300' : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'}">
+						{#if notif.status === 'warning'}
 							<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24"><path d="M4.5 3.75a3 3 0 0 0-3 3v10.5a3 3 0 0 0 3 3h15a3 3 0 0 0 3-3V6.75a3 3 0 0 0-3-3h-15Zm4.125 3a2.25 2.25 0 1 1 0 4.5 2.25 2.25 0 0 1 0-4.5Zm-3.75 8.25a3.75 3.75 0 0 1 7.5 0h-7.5Z"/></svg>
-						{:else if notif.type === 'deposit'}
+						{:else if notif.status === 'success'}
 							<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 7.5a2.25 2.25 0 1 0 0 4.5 2.25 2.25 0 0 0 0-4.5ZM1.5 4.875C1.5 3.839 2.34 3 3.375 3h17.25c1.035 0 1.875.84 1.875 1.875v9.75c0 1.036-.84 1.875-1.875 1.875H3.375A1.875 1.875 0 0 1 1.5 14.625v-9.75Z" clip-rule="evenodd"/></svg>
-						{:else if notif.type === 'alert'}
+						{:else if notif.status === 'danger'}
 							<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M9.401 3.003c1.155-2 4.043-2 5.197 0l7.355 12.748c1.154 2-.29 4.5-2.599 4.5H4.645c-2.309 0-3.752-2.5-2.598-4.5L9.4 3.003ZM12 8.25a.75.75 0 0 1 .75.75v3.75a.75.75 0 0 1-1.5 0V9a.75.75 0 0 1 .75-.75Zm0 8.25a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" clip-rule="evenodd"/></svg>
 						{:else}
 							<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 0 1 0 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 0 1 0-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281Z"/></svg>
@@ -348,12 +416,12 @@
 					<div class="min-w-0 flex-1">
 						<div class="flex items-start justify-between gap-2">
 							<p class="text-xs font-semibold text-gray-900 dark:text-white">{notif.title}</p>
-							{#if !notif.read}
+							{#if !notif.read_at}
 								<span class="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500"></span>
 							{/if}
 						</div>
-						<p class="mt-0.5 text-[11px] text-gray-600 dark:text-gray-400 leading-relaxed">{notif.message}</p>
-						<p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">{notif.time}</p>
+						<p class="mt-0.5 text-[11px] text-gray-600 dark:text-gray-400 leading-relaxed">{notif.body}</p>
+						<p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">{new Date(notif.created_at).toLocaleString()}</p>
 					</div>
 				</div>
 			{/each}

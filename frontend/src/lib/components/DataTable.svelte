@@ -26,6 +26,7 @@
 		searchValue?: string;
 		onSearch?: (value: string) => void;
 		searchPlaceholder?: string;
+		onRowClick?: (row: R) => void;
 	}
 
 	let {
@@ -42,7 +43,8 @@
 		sortDir = 'asc',
 		searchValue = $bindable(''),
 		onSearch,
-		searchPlaceholder = 'Search…'
+		searchPlaceholder = 'Search…',
+		onRowClick
 	}: Props<T> = $props();
 
 	let totalPages = $derived(Math.max(1, Math.ceil(total / perPage)));
@@ -143,7 +145,12 @@
 					</tr>
 				{:else}
 					{#each rows as row, i (i)}
-						<tr class="transition hover:bg-gray-50/75 dark:hover:bg-gray-800/50">
+						<tr
+							class="transition hover:bg-gray-50/75 dark:hover:bg-gray-800/50 {onRowClick ? 'cursor-pointer' : ''}"
+							onclick={() => onRowClick?.(row)}
+							onkeydown={(e) => { if (onRowClick && e.key === 'Enter') onRowClick(row); }}
+							tabindex={onRowClick ? 0 : undefined}
+						>
 							{#each columns as col (col.key)}
 								<td class="px-4 py-3 text-sm text-gray-900 dark:text-gray-300 {col.class ?? ''}">
 									{#if col.badge}

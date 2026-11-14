@@ -22,8 +22,46 @@
 	let meta = $state<Meta>({ total: 0, per_page: 10, current_page: 1 });
 	let loading = $state(true);
 	let search = $state('');
+	let approvalFilter = $state('');
+	let selectedIds = $state<number[]>([]);
+	let bulkDeleting = $state(false);
 	let perPage = $state(10);
 	let currentPage = $state(1);
+
+	let allSelected = $derived(
+		templates.length > 0 && templates.every((t) => selectedIds.includes(t.id))
+	);
+
+	function toggleSelectAll() {
+		if (allSelected) {
+			selectedIds = [];
+		} else {
+			selectedIds = templates.map((t) => t.id);
+		}
+	}
+
+	function toggleSelect(id: number) {
+		if (selectedIds.includes(id)) {
+			selectedIds = selectedIds.filter((x) => x !== id);
+		} else {
+			selectedIds = [...selectedIds, id];
+		}
+	}
+
+	async function handleBulkDelete() {
+		if (selectedIds.length === 0 || bulkDeleting) return;
+		bulkDeleting = true;
+		try {
+			await api.post('/api/v1/customer/templates/bulk-delete', { ids: selectedIds });
+			toast.success('Templates Deleted', `Deleted ${selectedIds.length} selected template(s).`);
+			selectedIds = [];
+			await load(1);
+		} catch (err: unknown) {
+			toast.error('Bulk Delete Error', err instanceof Error ? err.message : 'Failed to delete selected templates.');
+		} finally {
+			bulkDeleting = false;
+		}
+	}
 
 	// Modals
 	let createModalOpen = $state(false);
@@ -35,12 +73,48 @@
 	let deleteConfirmOpen = $state(false);
 	let templateToDelete = $state<Template | null>(null);
 
+	let editModalOpen = $state(false);
+	let editingTemplate = $state<Template | null>(null);
+	let editName = $state('');
+	let editBody = $state('');
+	let savingEdit = $state(false);
+
+	function openEdit(tmpl: Template) {
+		editingTemplate = tmpl;
+		editName = tmpl.name;
+		editBody = tmpl.body;
+		editModalOpen = true;
+	}
+
+	async function handleUpdateTemplate() {
+		if (!editingTemplate || !editName.trim() || !editBody.trim()) {
+			toast.error('Validation error', 'Template name and body are required.');
+			return;
+		}
+		savingEdit = true;
+		try {
+			await api.put(`/api/v1/customer/templates/${editingTemplate.id}`, {
+				name: editName.trim(),
+				body: editBody.trim()
+			});
+			toast.success('Template Updated', 'Your template changes were saved.');
+			editModalOpen = false;
+			editingTemplate = null;
+			load(currentPage);
+		} catch (err: unknown) {
+			toast.error('Update Error', err instanceof Error ? err.message : 'Failed to update template.');
+		} finally {
+			savingEdit = false;
+		}
+	}
+
 	async function load(p = 1) {
 		loading = true;
 		currentPage = p;
 		try {
 			const params = new URLSearchParams({ page: String(p), per_page: String(perPage) });
 			if (search) params.set('search', search);
+			if (approvalFilter) params.set('approval', approvalFilter);
 			const data = await api.get<{ data: Template[]; meta: Meta }>(`/api/v1/customer/templates?${params}`);
 			templates = data.data || [];
 			meta = data.meta || { total: 0, per_page: perPage, current_page: p };
@@ -61,12 +135,12 @@
 		}
 
 		submitting = true;
-		try {
-			await api.post('/api/v1/customer/templates', {
+					try {
+			const res = await api.post<{ message?: string }>('/api/v1/customer/templates', {
 				name: newName.trim(),
 				body: newBody.trim()
 			});
-			toast.success('Template Created', 'Your template has been submitted for review.');
+			toast.success('Template Created', res?.message ?? 'Your template has been created.');
 			createModalOpen = false;
 			newName = '';
 			newBody = '';
@@ -135,8 +209,31 @@
 
 	<!-- Main Card -->
 	<div class="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-		<!-- Toolbar: Search -->
-		<div class="flex items-center justify-end gap-2 border-b border-gray-100 p-3 bg-white">
+		<!-- Toolbar: Filter, Bulk Delete & Search -->
+		<div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 p-3 bg-white">
+			<div class="flex items-center gap-2">
+				<select
+					bind:value={approvalFilter}
+					onchange={() => load(1)}
+					aria-label="Filter by approval status"
+					class="rounded-lg border border-gray-300 bg-white py-1.5 px-2.5 text-xs text-gray-800 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
+				>
+					<option value="">All Approval Statuses</option>
+					<option value="approved">Approved</option>
+					<option value="pending">Pending Review</option>
+					<option value="rejected">Rejected</option>
+				</select>
+				{#if selectedIds.length > 0}
+					<button
+						type="button"
+						disabled={bulkDeleting}
+						onclick={handleBulkDelete}
+						class="inline-flex items-center gap-1 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+					>
+						{bulkDeleting ? 'Deleting…' : `Delete Selected (${selectedIds.length})`}
+					</button>
+				{/if}
+			</div>
 			<div class="relative w-64">
 				<div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-2.5">
 					<svg class="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -146,6 +243,7 @@
 				<input
 					type="text"
 					bind:value={search}
+					onkeydown={(e) => { if (e.key === 'Enter') load(1); }}
 					placeholder="Search"
 					class="w-full rounded-lg border border-gray-300 bg-white py-1.5 pr-3 pl-8 text-xs text-gray-900 placeholder-gray-400 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
 				/>
@@ -157,6 +255,15 @@
 			<table class="w-full text-left border-collapse text-xs">
 				<thead>
 					<tr class="border-b border-gray-200 bg-gray-50/70 text-gray-600 font-semibold tracking-wider uppercase text-[11px]">
+						<th class="w-10 py-3 px-4">
+							<input
+								type="checkbox"
+								checked={allSelected}
+								onchange={toggleSelectAll}
+								class="rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+								aria-label="Select all templates"
+							/>
+						</th>
 						<th class="py-3 px-4">TEMPLATE NAME</th>
 						<th class="py-3 px-4">MESSAGE TEMPLATE</th>
 						<th class="py-3 px-4">STATUS</th>
@@ -167,14 +274,14 @@
 				<tbody class="divide-y divide-gray-100 bg-white">
 					{#if loading}
 						<tr>
-							<td colspan="5" class="py-12 text-center text-gray-500">
+							<td colspan="6" class="py-12 text-center text-gray-500">
 								<div class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-teal-600"></div>
 								<p class="mt-2 text-xs">Loading templates...</p>
 							</td>
 						</tr>
 					{:else if filteredTemplates.length === 0}
 						<tr>
-							<td colspan="5" class="py-12 text-center text-gray-500">
+							<td colspan="6" class="py-12 text-center text-gray-500">
 								<p class="text-sm font-medium text-gray-700">No templates found</p>
 								<p class="mt-1 text-xs text-gray-400">Click "New template" above to create reusable SMS drafts.</p>
 							</td>
@@ -182,6 +289,15 @@
 					{:else}
 						{#each filteredTemplates as tmpl (tmpl.id)}
 							<tr class="hover:bg-gray-50/70 transition">
+								<td class="py-3 px-4">
+									<input
+										type="checkbox"
+										checked={selectedIds.includes(tmpl.id)}
+										onchange={() => toggleSelect(tmpl.id)}
+										class="rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+										aria-label="Select template {tmpl.name}"
+									/>
+								</td>
 								<td class="py-3 px-4 font-semibold text-gray-900 whitespace-nowrap">
 									{tmpl.name}
 								</td>
@@ -217,6 +333,18 @@
 								</td>
 								<td class="py-3 px-4 text-right whitespace-nowrap">
 									<div class="flex items-center justify-end gap-1">
+										{#if tmpl.status !== 'approved'}
+											<button
+												type="button"
+												onclick={() => openEdit(tmpl)}
+												class="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-teal-700 cursor-pointer"
+												title="Edit"
+											>
+												<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+													<path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
+												</svg>
+											</button>
+										{/if}
 										<button
 											type="button"
 											onclick={() => (selectedTemplate = tmpl)}
@@ -309,7 +437,7 @@
 						disabled={submitting}
 						class="rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition disabled:opacity-50 cursor-pointer"
 					>
-						{submitting ? 'Submitting...' : 'Submit for Review'}
+						{submitting ? 'Saving...' : 'Create Template'}
 					</button>
 				</div>
 			</form>
@@ -343,6 +471,12 @@
 					<span class="text-gray-500 font-medium">Created At</span>
 					<span class="text-gray-700">{new Date(selectedTemplate.created_at).toLocaleString()}</span>
 				</div>
+				{#if selectedTemplate.status === 'rejected' && selectedTemplate.rejection_reason}
+					<div class="py-1">
+						<span class="block text-gray-500 font-medium mb-1">Rejection Reason</span>
+						<div class="rounded-lg bg-rose-50 p-3 text-xs text-rose-700 border border-rose-200">{selectedTemplate.rejection_reason}</div>
+					</div>
+				{/if}
 				<div class="py-2">
 					<span class="block text-gray-500 font-medium mb-1">Message Body</span>
 					<div class="rounded-lg bg-gray-50 p-3 text-xs text-gray-800 leading-relaxed border border-gray-200">
@@ -388,6 +522,30 @@
 					Delete
 				</button>
 			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Edit Template Modal -->
+{#if editModalOpen && editingTemplate}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in backdrop-blur-xs">
+		<div class="relative w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl border border-gray-100">
+			<h3 class="text-base font-bold text-gray-900">Edit Template</h3>
+			<form onsubmit={(e) => { e.preventDefault(); handleUpdateTemplate(); }} class="mt-4 space-y-4">
+				<div>
+					<label for="edit-template-name" class="block text-xs font-semibold text-gray-700">Template Name<span class="text-red-500">*</span></label>
+					<input id="edit-template-name" type="text" bind:value={editName} required class="mt-1.5 w-full rounded-lg border border-gray-300 bg-white py-2 px-3 text-xs text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600" />
+				</div>
+				<div>
+					<label for="edit-template-body" class="block text-xs font-semibold text-gray-700">Message Content<span class="text-red-500">*</span></label>
+					<textarea id="edit-template-body" bind:value={editBody} rows={5} required class="mt-1.5 w-full rounded-lg border border-gray-300 bg-white py-2 px-3 text-xs text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"></textarea>
+				</div>
+				<p class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">Once the admin approves a template it becomes locked and can no longer be edited.</p>
+				<div class="mt-6 flex items-center justify-end gap-3 pt-2">
+					<button type="button" onclick={() => { editModalOpen = false; editingTemplate = null; }} class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer">Cancel</button>
+					<button type="submit" disabled={savingEdit} class="rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition disabled:opacity-50 cursor-pointer">{savingEdit ? 'Saving...' : 'Save Changes'}</button>
+				</div>
+			</form>
 		</div>
 	</div>
 {/if}

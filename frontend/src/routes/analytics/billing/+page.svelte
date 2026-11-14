@@ -2,6 +2,7 @@
 	import { api } from '$lib/api.js';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { toast } from '$lib/stores/toast.svelte.js';
 
 	interface Trend { date: string; amount?: number; cost?: number; }
 	interface Method { method: string; amount: number; }
@@ -24,6 +25,35 @@
 	let data = $state<BillingData | null>(null);
 	let loading = $state(true);
 	let range = $state('30d');
+	let topUpOpen = $state(false);
+	let topUpAmount = $state('');
+	let toppingUp = $state(false);
+
+	async function handleTopUp() {
+		const amt = parseFloat(topUpAmount);
+		if (isNaN(amt) || amt < 50 || amt > 100000) {
+			toast.error('Invalid Amount', 'Minimum deposit is BDT 50 and maximum is BDT 100,000.');
+			return;
+		}
+		toppingUp = true;
+		try {
+			const res = await api.post<{ redirect_url?: string; success: boolean; data?: any }>('/api/v1/customer/deposits', {
+				amount: amt,
+				gateway: 'piprapay'
+			});
+			if (res.redirect_url) {
+				window.location.href = res.redirect_url;
+				return;
+			}
+			toast.success('Deposit Initiated', `Deposit of BDT ${amt.toFixed(2)} created.`);
+			topUpOpen = false;
+			load();
+		} catch (err: any) {
+			toast.error('Deposit Error', err?.message || 'Failed to initiate deposit.');
+		} finally {
+			toppingUp = false;
+		}
+	}
 
 	const rangeOptions = [
 		{ value: 'today', label: 'Today' },
@@ -151,7 +181,7 @@
 		<h1 class="text-2xl font-bold text-gray-900">Billing Analytics</h1>
 		<button
 			type="button"
-			onclick={() => goto('/billing/deposits')}
+			onclick={() => { topUpAmount = ''; topUpOpen = true; }}
 			class="inline-flex items-center gap-2 rounded-lg border border-teal-600 bg-white px-4 py-2 text-sm font-semibold text-teal-700 shadow-sm transition hover:bg-teal-50"
 		>
 			<!-- taka-in-circle icon -->
@@ -429,3 +459,51 @@
 		</div>
 	</div>
 </div>
+
+{#if topUpOpen}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+		<div class="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-xl border border-gray-100">
+			<div class="flex items-start gap-4">
+				<div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-800 text-xl font-bold">
+					৳
+				</div>
+				<div class="min-w-0 flex-1">
+					<h3 class="text-lg font-bold text-gray-900">Add Balance</h3>
+					<p class="mt-1 text-xs text-gray-500 leading-relaxed">
+						Minimum deposit amount is BDT 50 and maximum deposit amount is BDT 100,000.
+					</p>
+				</div>
+			</div>
+			<div class="mt-5">
+				<label for="billing-topup-amount" class="block text-xs font-semibold text-gray-700 mb-1.5">Amount (BDT)</label>
+				<input
+					id="billing-topup-amount"
+					type="number"
+					min="50"
+					max="100000"
+					step="1"
+					bind:value={topUpAmount}
+					placeholder="e.g. 500"
+					class="w-full rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
+				/>
+			</div>
+			<div class="mt-6 flex justify-end gap-2">
+				<button
+					type="button"
+					onclick={() => (topUpOpen = false)}
+					class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer"
+				>
+					Cancel
+				</button>
+				<button
+					type="button"
+					disabled={toppingUp}
+					onclick={handleTopUp}
+					class="rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-50 cursor-pointer"
+				>
+					{toppingUp ? 'Redirecting...' : 'Proceed to Pay'}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}

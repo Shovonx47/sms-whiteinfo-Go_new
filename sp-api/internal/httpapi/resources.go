@@ -22,14 +22,25 @@ type listMeta struct {
 }
 
 type spCustomer struct {
-	ID        int64   `json:"id"`
-	Name      string  `json:"name"`
-	Email     string  `json:"email"`
-	Phone     string  `json:"phone"`
-	Balance   float64 `json:"balance"`
-	KYCStatus string  `json:"kyc_status"`
-	Status    string  `json:"status"`
-	CreatedAt string  `json:"created_at"`
+	ID                 int64      `json:"id"`
+	Name               string     `json:"name"`
+	Email              string     `json:"email"`
+	Phone              string     `json:"phone"`
+	Balance            float64    `json:"balance"`
+	KYCStatus          string     `json:"kyc_status"`
+	Status             string     `json:"status"`
+	CreatedAt          string     `json:"created_at"`
+	PlanName           string     `json:"plan_name"`
+	NIDNumber          string     `json:"nid_number"`
+	FrontNID           string     `json:"front_nid"`
+	BackNID            string     `json:"back_nid"`
+	LivePhoto          string     `json:"live_photo"`
+	BusinessName       string     `json:"business_name"`
+	TradeLicenseNumber string     `json:"trade_license_number"`
+	TradeLicenseFile   string     `json:"trade_license_file"`
+	KYCRejectedReason  string     `json:"kyc_rejected_reason"`
+	KYCResubmitFields  any        `json:"kyc_resubmit_fields"`
+	DeletedAt          *time.Time `json:"deleted_at"`
 }
 
 type distributionEntry struct {
@@ -113,16 +124,16 @@ func (server *Server) customers(ctx fiber.Ctx) error {
 	search := strings.TrimSpace(ctx.Query("search"))
 
 	arguments := []any{claims.SPID, "customer"}
-	where := "WHERE sp_id = ? AND type = ? AND deleted_at IS NULL"
+	where := "WHERE u.sp_id = ? AND u.type = ? AND u.deleted_at IS NULL"
 
 	if search != "" {
-		where += " AND (name LIKE ? OR email LIKE ? OR phone LIKE ?)"
+		where += " AND (u.name LIKE ? OR u.email LIKE ? OR u.phone LIKE ?)"
 		term := "%" + search + "%"
 		arguments = append(arguments, term, term, term)
 	}
 
 	var total int
-	if err := server.db.QueryRow("SELECT COUNT(*) FROM users "+where, arguments...).Scan(&total); err != nil {
+	if err := server.db.QueryRow("SELECT COUNT(*) FROM users u "+where, arguments...).Scan(&total); err != nil {
 		return ctx.JSON(fiber.Map{
 			"data": []spCustomer{},
 			"meta": listMeta{Page: page, PerPage: perPage, Total: 0},
@@ -131,9 +142,13 @@ func (server *Server) customers(ctx fiber.Ctx) error {
 
 	arguments = append(arguments, perPage, (page-1)*perPage)
 	rows, err := server.db.Query(`
-		SELECT id, name, email, COALESCE(phone, ''), balance, COALESCE(kyc_status, 'pending'), status, created_at
-		FROM users `+where+`
-		ORDER BY created_at DESC
+		SELECT u.id, u.name, u.email, COALESCE(u.phone, ''), u.balance, COALESCE(u.kyc_status, 'pending'), u.status, u.created_at,
+		       COALESCE(p.name, '')
+		FROM users u
+		LEFT JOIN tariff_plan_assignments a ON a.user_id = u.id AND a.status = 'active'
+		LEFT JOIN tariff_plans p ON p.id = a.tariff_plan_id
+		`+where+`
+		ORDER BY u.created_at DESC
 		LIMIT ? OFFSET ?
 	`, arguments...)
 	if err != nil {
@@ -146,7 +161,7 @@ func (server *Server) customers(ctx fiber.Ctx) error {
 		var item spCustomer
 		var createdAt time.Time
 		if err := rows.Scan(&item.ID, &item.Name, &item.Email, &item.Phone, &item.Balance,
-			&item.KYCStatus, &item.Status, &createdAt); err != nil {
+			&item.KYCStatus, &item.Status, &createdAt, &item.PlanName); err != nil {
 			return databaseError(ctx, err)
 		}
 		item.CreatedAt = createdAt.Format("2006-01-02 15:04")
@@ -169,10 +184,13 @@ func (server *Server) fundCustomer(ctx fiber.Ctx) error {
 	}
 
 	payload := fundPayload{}
-	if err := json.Unmarshal(ctx.Body(), &payload); err != nil || payload.Amount <= 0 {
+	if err := json.Unmarshal(ctx.Body(), &payload); err != nil || payload.Amount == 0 {
 		return ctx.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"message": "A positive amount is required.",
+			"message": "A non-zero amount is required (negative to reverse).",
 		})
+	}
+	if math.IsNaN(payload.Amount) || math.IsInf(payload.Amount, 0) {
+		return ctx.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "A valid amount is required."})
 	}
 
 	tx, err := server.db.Begin()
@@ -191,7 +209,7 @@ func (server *Server) fundCustomer(ctx fiber.Ctx) error {
 		return databaseError(ctx, err)
 	}
 
-	if payload.Amount > spBalance {
+	if payload.Amount > 0 && payload.Amount > spBalance {
 		return ctx.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
 			"message": "Insufficient reseller balance.",
 		})
@@ -199,16 +217,22 @@ func (server *Server) fundCustomer(ctx fiber.Ctx) error {
 
 	// Lock and read customer balance – must belong to this SP
 	var customerBalance float64
-	var customerName string
+	var customerName, customerStatus string
 	err = tx.QueryRow(
-		"SELECT balance, name FROM users WHERE id = ? AND sp_id = ? AND type = 'customer' AND deleted_at IS NULL FOR UPDATE",
+		"SELECT balance, name, status FROM users WHERE id = ? AND sp_id = ? AND type = 'customer' AND deleted_at IS NULL FOR UPDATE",
 		customerID, claims.SPID,
-	).Scan(&customerBalance, &customerName)
+	).Scan(&customerBalance, &customerName, &customerStatus)
 	if err == sql.ErrNoRows {
 		return ctx.Status(http.StatusNotFound).JSON(fiber.Map{"message": "Customer not found or not assigned to you."})
 	}
 	if err != nil {
 		return databaseError(ctx, err)
+	}
+	if customerStatus != "approved" {
+		return ctx.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Balance can only be distributed to approved customers."})
+	}
+	if payload.Amount < 0 && customerBalance < math.Abs(payload.Amount) {
+		return ctx.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Customer has insufficient balance to reverse this amount."})
 	}
 
 	newSPBalance := spBalance - payload.Amount
@@ -230,12 +254,17 @@ func (server *Server) fundCustomer(ctx fiber.Ctx) error {
 		return databaseError(ctx, err)
 	}
 
+	isReversal := payload.Amount < 0
 	note := payload.Description
 	if note == "" {
-		note = fmt.Sprintf("Fund transfer to %s", customerName)
+		if isReversal {
+			note = fmt.Sprintf("Balance reversal from %s", customerName)
+		} else {
+			note = fmt.Sprintf("Fund transfer to %s", customerName)
+		}
 	}
 
-	// Record in sp_distributions
+	// Record in sp_distributions (negative amounts are reversals).
 	res, err := tx.Exec(`
 		INSERT INTO sp_distributions (sp_id, customer_id, amount, note, distributed_by, created_at)
 		VALUES (?, ?, ?, ?, ?, NOW())
@@ -246,20 +275,25 @@ func (server *Server) fundCustomer(ctx fiber.Ctx) error {
 	distID, _ := res.LastInsertId()
 
 	desc := fmt.Sprintf("S P distribution #%d: %s", distID, note)
+	customerDirection := "credit"
+	spDirection := "debit"
+	if isReversal {
+		desc = fmt.Sprintf("S P reversal #%d: %s", distID, note)
+		customerDirection = "debit"
+		spDirection = "credit"
+	}
 
-	// Transaction ledger entry for customer (credit)
 	if _, err := tx.Exec(`
 		INSERT INTO transactions (user_id, transactionable_type, transactionable_id, amount, direction, balance_before, balance_after, description, created_at, updated_at)
-		VALUES (?, 'App\\Models\\SpDistribution', ?, ?, 'credit', ?, ?, ?, NOW(), NOW())
-	`, customerID, distID, payload.Amount, customerBalance, newCustomerBalance, desc); err != nil {
+		VALUES (?, 'App\\Models\\SpDistribution', ?, ?, ?, ?, ?, ?, NOW(), NOW())
+	`, customerID, distID, math.Abs(payload.Amount), customerDirection, customerBalance, newCustomerBalance, desc); err != nil {
 		return databaseError(ctx, err)
 	}
 
-	// Transaction ledger entry for SP (debit)
 	resDebit, err := tx.Exec(`
 		INSERT INTO transactions (user_id, transactionable_type, transactionable_id, amount, direction, balance_before, balance_after, description, created_at, updated_at)
-		VALUES (?, 'App\\Models\\SpDistribution', ?, ?, 'debit', ?, ?, ?, NOW(), NOW())
-	`, claims.SPID, distID, math.Abs(payload.Amount), spBalance, newSPBalance, desc)
+		VALUES (?, 'App\\Models\\SpDistribution', ?, ?, ?, ?, ?, ?, NOW(), NOW())
+	`, claims.SPID, distID, math.Abs(payload.Amount), spDirection, spBalance, newSPBalance, desc)
 	if err != nil {
 		return databaseError(ctx, err)
 	}
@@ -274,8 +308,13 @@ func (server *Server) fundCustomer(ctx fiber.Ctx) error {
 		return databaseError(ctx, err)
 	}
 
+	message := fmt.Sprintf("Successfully transferred ৳%.2f to %s.", payload.Amount, customerName)
+	if isReversal {
+		message = fmt.Sprintf("Successfully reversed ৳%.2f from %s.", math.Abs(payload.Amount), customerName)
+	}
+
 	return ctx.JSON(fiber.Map{
-		"message": fmt.Sprintf("Successfully transferred ৳%.2f to %s.", payload.Amount, customerName),
+		"message": message,
 		"data": fiber.Map{
 			"sp_balance":       newSPBalance,
 			"customer_balance": newCustomerBalance,
