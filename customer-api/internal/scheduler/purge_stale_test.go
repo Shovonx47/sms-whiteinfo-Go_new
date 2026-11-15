@@ -10,7 +10,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
-func TestPurgeStaleMessagesAndRefund(t *testing.T) {
+func TestPurgeStaleMessagesWithoutRefund(t *testing.T) {
 	db, err := sql.Open("mysql", "root:@tcp(127.0.0.1:3306)/sms_panel_scratch?parseTime=true")
 	if err != nil {
 		t.Skip("Scratch DB not available")
@@ -22,11 +22,9 @@ func TestPurgeStaleMessagesAndRefund(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Ensure WORKER_ENABLED=true so the safety guard allows purge-stale to run
+	// Ensure WORKER_ENABLED=true so the safety guard allows purge-stale to run.
 	os.Setenv("WORKER_ENABLED", "true")
-	os.Setenv("PURGE_STALE_REFUND", "true")
 	defer os.Unsetenv("WORKER_ENABLED")
-	defer os.Unsetenv("PURGE_STALE_REFUND")
 
 	// 1. Create a test user with initial balance 10.00
 	userRes, err := db.ExecContext(ctx, `
@@ -88,18 +86,18 @@ func TestPurgeStaleMessagesAndRefund(t *testing.T) {
 		}
 	}
 
-	// 5. Verify user balance was refunded exactly once per message: 10.00 + (2 * 0.45) = 10.90
+	// 5. Verify user balance was NOT refunded (legacy PurgeStaleQueue parity).
 	var finalBalance float64
 	err = db.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = ?", userID).Scan(&finalBalance)
 	if err != nil {
 		t.Fatalf("Failed to query user balance: %v", err)
 	}
-	expectedBalance := 10.90
+	expectedBalance := 10.00
 	if finalBalance < expectedBalance-0.001 || finalBalance > expectedBalance+0.001 {
-		t.Errorf("Expected user balance %.4f after purge refund, got %.4f", expectedBalance, finalBalance)
+		t.Errorf("Expected user balance %.4f without purge refund, got %.4f", expectedBalance, finalBalance)
 	}
 
-	// 6. Verify exactly 2 refund transactions exist (one for each message)
+	// 6. Verify zero refund credit transactions exist for the purged messages.
 	var txnCount int
 	err = db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM transactions 
@@ -108,11 +106,11 @@ func TestPurgeStaleMessagesAndRefund(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to count refund transactions: %v", err)
 	}
-	if txnCount != 2 {
-		t.Errorf("Expected exactly 2 refund transactions, found %d", txnCount)
+	if txnCount != 0 {
+		t.Errorf("Expected 0 refund transactions, found %d", txnCount)
 	}
 
-	// 7. Verify Idempotency: re-running purge stale does NOT create duplicate refunds
+	// 7. Re-running purge stale remains idempotent with 0 refunds.
 	scheduler.RunPurgeStaleForTest(ctx, 5)
 
 	var txnCountAfterSecondRun int
@@ -120,7 +118,7 @@ func TestPurgeStaleMessagesAndRefund(t *testing.T) {
 		SELECT COUNT(*) FROM transactions 
 		WHERE transactionable_type = 'message' AND transactionable_id IN (?, ?) AND direction = 'credit'
 	`, msgID1, msgID2).Scan(&txnCountAfterSecondRun)
-	if txnCountAfterSecondRun != 2 {
-		t.Errorf("Idempotency violation: second purge created duplicate transactions, got %d", txnCountAfterSecondRun)
+	if txnCountAfterSecondRun != 0 {
+		t.Errorf("Expected 0 refund transactions after second run, got %d", txnCountAfterSecondRun)
 	}
 }

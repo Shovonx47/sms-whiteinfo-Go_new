@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"smswhiteinfo/customer-api/internal/batch"
-	"smswhiteinfo/customer-api/internal/billing"
 )
 
 type MasterScheduler struct {
@@ -141,61 +140,14 @@ func (s *MasterScheduler) runPurgeStale(ctx context.Context, minutes int) {
 	}
 
 	threshold := time.Now().Add(-time.Duration(minutes) * time.Minute)
-	// Default to true unless explicitly disabled with PURGE_STALE_REFUND=false
-	purgeEnv := strings.ToLower(strings.TrimSpace(os.Getenv("PURGE_STALE_REFUND")))
-	refundEnabled := purgeEnv != "false"
 
-	if refundEnabled {
-		// Refund when purging stale sending/pending messages (Item 3 & 6)
-		rows, err := s.db.QueryContext(ctx, `
-			SELECT id, user_id, cost 
-			FROM messages 
-			WHERE status IN ('pending', 'sending') AND updated_at <= ?
-		`, threshold)
-		if err == nil {
-			type msgToRefund struct {
-				id     int64
-				userID int64
-				cost   float64
-			}
-			var msgs []msgToRefund
-			for rows.Next() {
-				var m msgToRefund
-				if err := rows.Scan(&m.id, &m.userID, &m.cost); err == nil {
-					msgs = append(msgs, m)
-				}
-			}
-			rows.Close()
-
-			for _, m := range msgs {
-				tx, err := s.db.BeginTx(ctx, nil)
-				if err != nil {
-					continue
-				}
-				res, err := tx.ExecContext(ctx, `
-					UPDATE messages 
-					SET status = 'failed', failed_at = NOW(), failed_reason = ?, updated_at = NOW() 
-					WHERE id = ? AND status IN ('pending', 'sending')
-				`, fmt.Sprintf("Auto-purged: stuck in queue for more than %d minutes without progress", minutes), m.id)
-				if err != nil {
-					_ = tx.Rollback()
-					continue
-				}
-				affected, _ := res.RowsAffected()
-				if affected == 1 && m.cost > 0 {
-					_, _ = billing.CreditBalance(ctx, tx, m.userID, m.cost, "message", m.id, "Refund: Auto-purged stale message")
-				}
-				_ = tx.Commit()
-			}
-		}
-	} else {
-		// Mark failed without refunding
-		_, _ = s.db.ExecContext(ctx, `
-			UPDATE messages 
-			SET status = 'failed', failed_at = NOW(), failed_reason = ?, updated_at = NOW() 
-			WHERE status IN ('pending', 'sending') AND updated_at <= ?
-		`, fmt.Sprintf("Auto-purged: stuck in queue for more than %d minutes without progress", minutes), threshold)
-	}
+	// Legacy parity (App\Console\Commands\PurgeStaleQueue): mark stuck messages
+	// and batches as 'failed' WITHOUT refunding customer balance.
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE messages
+		SET status = 'failed', failed_at = COALESCE(failed_at, NOW()), failed_reason = ?, updated_at = NOW()
+		WHERE status IN ('pending', 'sending') AND updated_at <= ?
+	`, fmt.Sprintf("Auto-purged: stuck in queue for more than %d minutes without progress", minutes), threshold)
 
 	// Purge stale batches
 	_, _ = s.db.ExecContext(ctx, `
