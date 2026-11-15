@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api.js';
 	import { toast } from '$lib/stores/toast.svelte.js';
+	import { computeSmsStats } from '$lib/utils/sms.js';
 	import { onMount } from 'svelte';
 
 	interface Template {
@@ -28,6 +29,26 @@
 	let perPage = $state(10);
 	let currentPage = $state(1);
 	let totalPages = $derived(Math.max(1, Math.ceil((meta.total || 0) / perPage)));
+
+	interface PricingRate {
+		masking_rate: number | null;
+		non_masking_rate: number | null;
+	}
+	let pricingRates = $state<PricingRate[]>([]);
+	let newBody = $state('');
+	let createStats = $derived(computeSmsStats(newBody));
+	let detectedVariables = $derived([...new Set([...newBody.matchAll(/{(\w+)}/g)].map((m) => m[1]))]);
+
+	function formatRateRange(masking: boolean): string {
+		const values = pricingRates
+			.map((rate) => (masking ? rate.masking_rate : rate.non_masking_rate))
+			.filter((value): value is number => value !== null && value !== undefined);
+		if (values.length === 0) return '—';
+		const min = Math.min(...values);
+		const max = Math.max(...values);
+		const fmt = (value: number) => `৳${value.toFixed(2)}`;
+		return min === max ? fmt(min) : `${fmt(min)}–${fmt(max)}`;
+	}
 
 	let allSelected = $derived(
 		templates.length > 0 && templates.every((t) => selectedIds.includes(t.id))
@@ -67,7 +88,6 @@
 	// Modals
 	let createModalOpen = $state(false);
 	let newName = $state('');
-	let newBody = $state('');
 	let submitting = $state(false);
 
 	let selectedTemplate = $state<Template | null>(null);
@@ -79,6 +99,7 @@
 	let editName = $state('');
 	let editBody = $state('');
 	let savingEdit = $state(false);
+	let editStats = $derived(computeSmsStats(editBody));
 
 	function openEdit(tmpl: Template) {
 		editingTemplate = tmpl;
@@ -127,7 +148,13 @@
 		}
 	}
 
-	onMount(() => load(1));
+	onMount(() => {
+		load(1);
+		api
+			.get<{ data: PricingRate[] }>('/api/v1/customer/pricing')
+			.then((res) => (pricingRates = res.data ?? []))
+			.catch(() => (pricingRates = []));
+	});
 
 	async function handleCreateTemplate() {
 		if (!newName.trim() || !newBody.trim()) {
@@ -137,11 +164,18 @@
 
 		submitting = true;
 					try {
-			const res = await api.post<{ message?: string }>('/api/v1/customer/templates', {
+			const res = await api.post<{ message?: string; data?: { status?: string } }>('/api/v1/customer/templates', {
 				name: newName.trim(),
 				body: newBody.trim()
 			});
-			toast.success('Template Created', res?.message ?? 'Your template has been created.');
+			if (res?.data?.status === 'pending') {
+				toast.success(
+					'Bulk SMS Template Submitted for Approval',
+					'Your template has been submitted to the admin for approval. Once approved, you can use it to send Bulk SMS campaigns anytime without waiting for admin approval.'
+				);
+			} else {
+				toast.success('Bulk SMS Template Created', 'Your template has been created and is ready to use.');
+			}
 			createModalOpen = false;
 			newName = '';
 			newBody = '';
@@ -204,7 +238,7 @@
 			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
 				<path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
 			</svg>
-			New template
+			New Bulk SMS Template
 		</button>
 	</div>
 
@@ -221,7 +255,7 @@
 				>
 					<option value="">All Approval Statuses</option>
 					<option value="approved">Approved</option>
-					<option value="pending">Pending Review</option>
+					<option value="pending">Pending</option>
 					<option value="rejected">Rejected</option>
 				</select>
 				{#if selectedIds.length > 0}
@@ -325,7 +359,7 @@
 											<svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
 												<path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
 											</svg>
-											Pending Review
+											Pending
 										</span>
 									{/if}
 								</td>
@@ -408,8 +442,12 @@
 {#if createModalOpen}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in backdrop-blur-xs">
 		<div class="relative w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl border border-gray-100">
-			<h3 class="text-base font-bold text-gray-900">New Template</h3>
+			<h3 class="text-base font-bold text-gray-900">Create Bulk SMS Template</h3>
 			<form onsubmit={(e) => { e.preventDefault(); handleCreateTemplate(); }} class="mt-4 space-y-4">
+				<div class="rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs leading-relaxed text-sky-900">
+					<p class="font-semibold">Admin Approval &amp; Instant Sending Workflow</p>
+					<p class="mt-1">When you create a Bulk SMS Template, it is submitted to the Superman admin for approval. Once approved, the template is permanently locked against edits, and you can dispatch campaigns with this approved template anytime without waiting for daily admin approvals!</p>
+				</div>
 				<div>
 					<label for="template-name-input" class="block text-xs font-semibold text-gray-700">Template Name<span class="text-red-500">*</span></label>
 					<input
@@ -422,16 +460,37 @@
 					/>
 				</div>
 				<div>
-					<label for="template-body-input" class="block text-xs font-semibold text-gray-700">Message Content<span class="text-red-500">*</span></label>
+					<label for="template-body-input" class="block text-xs font-semibold text-gray-700">Message Body<span class="text-red-500">*</span></label>
 					<textarea
 						id="template-body-input"
 						bind:value={newBody}
-						rows={5}
+						rows={6}
 						required
-						placeholder="Type your message template here. You can use {'{name}'}, {'{amount}'}, etc."
+						placeholder={'বাংলায় আপনার এসএমএস লিখুন... You can use placeholders like {name}, {code}, {amount}...'}
 						class="mt-1.5 w-full rounded-lg border border-gray-300 bg-white py-2 px-3 text-xs text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
 					></textarea>
 				</div>
+				<div class="rounded-lg border border-gray-200 bg-gray-50 p-2 text-[11px] text-gray-600">
+					<span class="font-medium text-gray-700">Remaining:</span> {createStats.remaining}/{createStats.perPartTotal}
+					<span class="ml-4 font-medium text-gray-700">SMS Count:</span> <span class="font-bold text-teal-700">{createStats.parts}</span>
+					<span class="ml-4 font-medium text-gray-700">Encoding:</span> {createStats.encoding}
+					<span class="ml-4 font-medium text-gray-700">Non-masking:</span> {formatRateRange(false)}/SMS
+					<span class="ml-4 font-medium text-gray-700">Masking:</span> {formatRateRange(true)}/SMS
+				</div>
+				<div class="rounded-lg border border-amber-300/60 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-800">
+					<strong class="font-semibold text-amber-900">BTRC নির্দেশনা:</strong> বিটিআরসি (BTRC) নিয়মানুযায়ী সকল প্রকার প্রমোশনাল ও বাল্ক এসএমএস বাংলায় পাঠানো বাধ্যতামূলক।
+				</div>
+				{#if detectedVariables.length}
+					<div>
+						<p class="text-xs font-semibold text-gray-700">Variables / Placeholders</p>
+						<div class="mt-1.5 flex flex-wrap gap-1.5">
+							{#each detectedVariables as variable (variable)}
+								<span class="rounded-md border border-teal-200 bg-teal-50 px-2 py-0.5 text-[11px] font-mono font-medium text-teal-700">{variable}</span>
+							{/each}
+						</div>
+						<p class="mt-1 text-[10px] text-gray-500">Variables enclosed in curly braces in your message body are detected automatically.</p>
+					</div>
+				{/if}
 				<div class="mt-6 flex items-center justify-end gap-3 pt-2">
 					<button
 						type="button"
@@ -445,7 +504,7 @@
 						disabled={submitting}
 						class="rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition disabled:opacity-50 cursor-pointer"
 					>
-						{submitting ? 'Saving...' : 'Create Template'}
+						{submitting ? 'Saving...' : 'Create'}
 					</button>
 				</div>
 			</form>
@@ -538,20 +597,29 @@
 {#if editModalOpen && editingTemplate}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in backdrop-blur-xs">
 		<div class="relative w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl border border-gray-100">
-			<h3 class="text-base font-bold text-gray-900">Edit Template</h3>
+			<h3 class="text-base font-bold text-gray-900">Edit Bulk SMS Template</h3>
 			<form onsubmit={(e) => { e.preventDefault(); handleUpdateTemplate(); }} class="mt-4 space-y-4">
+				<div class="rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs leading-relaxed text-sky-900">
+					<p class="font-semibold">Admin Approval &amp; Instant Sending Workflow</p>
+					<p class="mt-1">When you create a Bulk SMS Template, it is submitted to the Superman admin for approval. Once approved, the template is permanently locked against edits, and you can dispatch campaigns with this approved template anytime without waiting for daily admin approvals!</p>
+				</div>
 				<div>
 					<label for="edit-template-name" class="block text-xs font-semibold text-gray-700">Template Name<span class="text-red-500">*</span></label>
 					<input id="edit-template-name" type="text" bind:value={editName} required class="mt-1.5 w-full rounded-lg border border-gray-300 bg-white py-2 px-3 text-xs text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600" />
 				</div>
 				<div>
-					<label for="edit-template-body" class="block text-xs font-semibold text-gray-700">Message Content<span class="text-red-500">*</span></label>
-					<textarea id="edit-template-body" bind:value={editBody} rows={5} required class="mt-1.5 w-full rounded-lg border border-gray-300 bg-white py-2 px-3 text-xs text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"></textarea>
+					<label for="edit-template-body" class="block text-xs font-semibold text-gray-700">Message Body<span class="text-red-500">*</span></label>
+					<textarea id="edit-template-body" bind:value={editBody} rows={6} required placeholder={'বাংলায় আপনার এসএমএস লিখুন... You can use placeholders like {name}, {code}, {amount}...'} class="mt-1.5 w-full rounded-lg border border-gray-300 bg-white py-2 px-3 text-xs text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"></textarea>
+				</div>
+				<div class="rounded-lg border border-gray-200 bg-gray-50 p-2 text-[11px] text-gray-600">
+					<span class="font-medium text-gray-700">Remaining:</span> {editStats.remaining}/{editStats.perPartTotal}
+					<span class="ml-4 font-medium text-gray-700">SMS Count:</span> <span class="font-bold text-teal-700">{editStats.parts}</span>
+					<span class="ml-4 font-medium text-gray-700">Encoding:</span> {editStats.encoding}
 				</div>
 				<p class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">Once the admin approves a template it becomes locked and can no longer be edited.</p>
 				<div class="mt-6 flex items-center justify-end gap-3 pt-2">
 					<button type="button" onclick={() => { editModalOpen = false; editingTemplate = null; }} class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer">Cancel</button>
-					<button type="submit" disabled={savingEdit} class="rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition disabled:opacity-50 cursor-pointer">{savingEdit ? 'Saving...' : 'Save Changes'}</button>
+					<button type="submit" disabled={savingEdit} class="rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition disabled:opacity-50 cursor-pointer">{savingEdit ? 'Saving...' : 'Save'}</button>
 				</div>
 			</form>
 		</div>

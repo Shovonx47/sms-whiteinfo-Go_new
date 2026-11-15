@@ -319,19 +319,16 @@ func (server *Server) bulkDeleteContacts(context fiber.Ctx) error {
 	}
 
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	pivotArgs := make([]any, 0, len(ids)+1)
-	pivotArgs = append(pivotArgs, claims.UserID)
+	args := make([]any, 0, len(ids)+3)
+	now := time.Now()
+	args = append(args, now, now, claims.UserID)
 	for _, id := range ids {
-		pivotArgs = append(pivotArgs, id)
+		args = append(args, id)
 	}
-	_, _ = server.db.Exec(
-		"DELETE cg FROM contact_group cg INNER JOIN contacts c ON c.id = cg.contact_id WHERE c.user_id = ? AND cg.contact_id IN ("+placeholders+")",
-		pivotArgs...,
-	)
 
 	res, err := server.db.Exec(
-		"DELETE FROM contacts WHERE user_id = ? AND id IN ("+placeholders+")",
-		pivotArgs...,
+		"UPDATE contacts SET deleted_at = ?, updated_at = ? WHERE user_id = ? AND id IN ("+placeholders+") AND deleted_at IS NULL",
+		args...,
 	)
 	if err != nil {
 		return databaseError(context, err)

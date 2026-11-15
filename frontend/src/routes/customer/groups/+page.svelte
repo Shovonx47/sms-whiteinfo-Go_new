@@ -196,20 +196,21 @@
 						<th class="py-3 px-4">CONTACTS</th>
 						<th class="py-3 px-4">DESCRIPTION</th>
 						<th class="py-3 px-4">CREATED AT</th>
+						<th class="py-3 px-4">UPDATED AT</th>
 						<th class="py-3 px-4 text-right"></th>
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-gray-100 bg-white">
 					{#if loading}
 						<tr>
-							<td colspan="6" class="py-12 text-center text-gray-500">
+							<td colspan="7" class="py-12 text-center text-gray-500">
 								<div class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-teal-600"></div>
 								<p class="mt-2 text-xs">Loading contact groups...</p>
 							</td>
 						</tr>
 					{:else if filteredGroups.length === 0}
 						<tr>
-							<td colspan="6" class="py-12 text-center text-gray-500">
+							<td colspan="7" class="py-12 text-center text-gray-500">
 								<p class="text-sm font-medium text-gray-700">No groups found</p>
 								<p class="mt-1 text-xs text-gray-400">Click "New group" above to create an audience segment.</p>
 							</td>
@@ -243,6 +244,9 @@
 								</td>
 								<td class="py-3 px-4 text-gray-600 whitespace-nowrap">
 									{new Date(group.created_at).toLocaleDateString()}
+								</td>
+								<td class="py-3 px-4 text-gray-600 whitespace-nowrap">
+									{new Date(group.updated_at || group.created_at).toLocaleDateString()}
 								</td>
 								<td class="py-3 px-4 text-right whitespace-nowrap">
 									<div class="flex items-center justify-end gap-1">

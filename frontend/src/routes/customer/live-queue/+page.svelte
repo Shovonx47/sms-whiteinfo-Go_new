@@ -63,6 +63,7 @@
 	let messages = $state<LiveMessage[]>([]);
 	let loading = $state(true);
 	let isPaused = $state(false);
+	let limit = $state(30);
 
 	// Controls & Filters
 	let search = $state('');
@@ -74,7 +75,7 @@
 
 	async function fetchQueue() {
 		try {
-			const res = await api.get<QueueApiResponse>('/api/v1/customer/live-queue');
+			const res = await api.get<QueueApiResponse>(`/api/v1/customer/live-queue?limit=${limit}`);
 			if (res.stats) {
 				stats = res.stats;
 			} else if (res.data) {
@@ -346,6 +347,18 @@
 							<span>Table</span>
 						</button>
 					</div>
+
+					<select
+						bind:value={limit}
+						onchange={fetchQueue}
+						class="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
+						title="Messages to show"
+					>
+						<option value={10}>10</option>
+						<option value={30}>30</option>
+						<option value={50}>50</option>
+						<option value={100}>100</option>
+					</select>
 
 					<button
 						type="button"

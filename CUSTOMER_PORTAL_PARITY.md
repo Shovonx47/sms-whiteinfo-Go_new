@@ -356,7 +356,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
 1. **2FA (Filament AppAuthentication)**: login challenge for TOTP/recovery code, `/2fa` status, encrypted QR setup, encrypted secret storage, bcrypt-hashed recovery codes stored as Laravel `encrypted:array`, single-use recovery consumption, disable with password + code, profile UI, login UI. Reads legacy Filament-encrypted values using `APP_KEY`.
 2. **Email change verification**: password-confirmed request, one-hour single-use token, duplicate-email checks, verification page, atomic email swap + `email_verified_at`, Laravel-compatible API messages.
 3. **Developer API documentation**: `/docs` page and API Documentation item in the gated Developer sidebar group.
-4. **Messages list**: all 19 reference columns except `API User` (new schema has no request-payload username source; see Open questions), plus the detail modal and status filters.
+4. **Messages list**: all 19 reference columns, with `API User` showing `—` because the new schema has no request-payload username source (see Open questions); detail modal and status filters are present. The 2026-11-15 second pass corrected search, grouping, time formats, balance NULL handling and detail fields.
 5. **Sent Message Logs (batches)**: next balance, SMS count, status, failure reason and event date added; cost now 4 decimals; batch detail invalid-list download already present.
 6. **Templates**: Prev/Next pagination controls added; approval filter, locking and creation flow retained.
 7. **Dashboard**: restored the reference 9-card set (Current Balance, Messages Today, Scheduled SMS, Cost Today, Success Rate, Failed Today, Total Contacts, Groups, Templates); Top Up deep-links to the deposit modal.
@@ -391,3 +391,26 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
 - Existing 2FA users must have `APP_KEY` identical to the Laravel application, otherwise encrypted secrets cannot be decrypted.
 - The static frontend build must be pointed at the Go API base URL; no live proxy was validated in this environment.
 - Automated tests cover token/TOTP/refund/PDF/analytics helpers, not SQL execution or HTTP integration against MySQL.
+
+---
+
+## Post-commit audit corrections (2026-11-15, second pass)
+
+The following items were rechecked directly against the read-only Laravel files after the first completion pass. Several earlier claims were too generous, so the target was corrected again.
+
+### Reference-code corrections applied
+- **Messages (`ListMessages`)**: message-ID search now accepts a numeric `MSG-000123`/`123` term; the 19 reference columns are all present, with `API User` rendered as `—` when no legacy request payload is available; `Submit Time` uses `sent_at ?? created_at` as time-only, `Delivery Time` is time-with-seconds; cost renders as `BDT`; previous/next balance render `—` when no transaction exists instead of a fabricated `0.00`; rows are grouped by status and collapsed by default; per-page selector is 10/25/50; the message detail modal now uses the reference field set (`UID`, `Sender`, `Recipient`, `Status`, `Cost`, `Parts`, conditional `Sent At`, conditional `Failed Reason`, `Body`, `Created At`, `Updated At`). Campaign is omitted by the locked campaign decision.
+- **Sent Message Logs (`ListBatches`)**: date/time falls back through `delivered_at`, `sent_at`, `failed_at`, then `created_at`; status filter exposes only the six `MessageStatus` values; clicking a row opens the shared message detail instead of a reduced custom modal; missing balances render `—`.
+- **Dashboard**: `Recent SMS` shows the reference `Sent At` column by default and its rows open the record’s detail; contact/group/template totals use reference-style abbreviation; the Failed Today card links to the unfiltered message list as in the reference.
+- **Live Queue**: `In Queue Now` counts only `pending`/`sending` and `Active Batches` only `processing`, matching `CustomerLiveQueueStatsWidget` and the active-batch monitor.
+- **Deposits**: header action is `Top Up` (not “Make Deposit”); status labels are `Pending`/`Completed`/`Failed`/`Refunded`; `Paid At` keeps the `Not paid yet` placeholder.
+- **Transactions**: reference labels are `Message Batch` and `S P Distribution` rather than shortened enum strings.
+- **Contacts/Groups**: groups relation on Contacts is read-only and links to the group; group/contact deletes and contact bulk delete are soft deletes; group/detail payloads include `updated_at`; group contact counts exclude soft-deleted contacts.
+- **Developer security**: access-token and IP-whitelist pages use the reference labels/columns/actions; IP requests validate public IPv4/IPv6/CIDR; token deletion requires the exact name; the dummy PipraPay key and localhost fallback were removed (503 when payment configuration is absent).
+- **Scheduled messages**: Pause/Resume/bulk-delete confirmations and notifications now match the reference strings.
+
+### Still not verified or still open
+- **`API User` data**: the column exists, but the schema has no persisted gateway `request_payload`/`sms_logs` projection, so it cannot display real values. It is not fabricated. Closing this requires adding the legacy `sms_logs` payload projection or accepting the reference column as effectively empty.
+- **Message status grouping** is client-side over the fetched page; Filament groups the filtered query. With multiple pages the group headers/counts describe the current page only. Live verification is required before calling this exact.
+- **No database/browser run**: all database-backed flows, including the corrected balance NULL handling, group counts, live-queue counters and pagination, remain unexercised because no MySQL/MariaDB/SMTP service or live API is available on this workstation.
+- **Visual details**: date/time formatting in modals uses `en-GB` browser formatting rather than Filament’s server-side format, and modal layouts are Svelte equivalents of Filament pages/infolists. These were not visually compared.

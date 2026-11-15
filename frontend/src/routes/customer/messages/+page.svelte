@@ -23,8 +23,12 @@
 		error_message?: string | null;
 		source_ip?: string;
 		request_id?: string;
+		sent_at?: string | null;
+		api_user?: string | null;
+		failed_reason?: string | null;
 		submitted_at: string;
 		delivered_at: string | null;
+		failed_at?: string | null;
 	}
 
 	interface Meta {
@@ -39,6 +43,7 @@
 	}
 
 	interface MessageDetail extends Message {
+		uid?: string | null;
 		msg_id: string;
 		batch_id: number | null;
 		sender_db_id: number | null;
@@ -55,7 +60,8 @@
 
 	let messages = $state<Message[]>([]);
 	let senders = $state<SenderOption[]>([]);
-	let meta = $state<Meta>({ total: 0, per_page: 15, current_page: 1 });
+	let meta = $state<Meta>({ total: 0, per_page: 10, current_page: 1 });
+	let perPage = $state(10);
 	let loading = $state(true);
 	let search = $state('');
 	let statusFilter = $state('');
@@ -87,10 +93,26 @@
 			const res = await api.get<{ data: MessageDetail }>(`/api/v1/customer/messages/${row.id}`);
 			detail = res.data;
 		} catch (err) {
+			detail = null;
 			toast.error('Message', err instanceof Error ? err.message : 'Unable to load message details.');
 		} finally {
 			detailLoading = false;
 		}
+	}
+
+	function openMessageById(id: number) {
+		void openMessage({
+			id,
+			to: '',
+			sender_id: '',
+			body: '',
+			status: '',
+			parts: 0,
+			cost: '0',
+			operator: '',
+			submitted_at: new Date().toISOString(),
+			delivered_at: null
+		});
 	}
 
 	async function exportMessages(format: 'csv' | 'pdf' = exportFormat) {
@@ -127,7 +149,7 @@
 		try {
 			const params = new URLSearchParams({
 				page: String(page),
-				per_page: String(meta.per_page),
+				per_page: String(perPage),
 				sort: sortKey,
 				dir: sortDir
 			});
@@ -142,6 +164,7 @@
 			);
 			messages = data.data;
 			meta = data.meta;
+			perPage = data.meta.per_page ?? perPage;
 		} catch {
 			if (!silent) messages = [];
 		} finally {
@@ -161,6 +184,8 @@
 		}
 		loadSenders();
 		load(1);
+		const viewId = Number(sp.get('view'));
+		if (Number.isInteger(viewId) && viewId > 0) openMessageById(viewId);
 		pollTimer = setInterval(() => load(meta.current_page || 1, true), 30000);
 	});
 
@@ -200,8 +225,21 @@
 		return new Date(iso).toLocaleString('en-GB', {
 			day: '2-digit',
 			month: 'short',
+			year: 'numeric',
 			hour: '2-digit',
-			minute: '2-digit'
+			minute: '2-digit',
+			second: '2-digit',
+			hour12: true
+		});
+	}
+
+	function formatTime(iso: string | null, withSeconds = false): string {
+		if (!iso) return '—';
+		return new Date(iso).toLocaleTimeString('en-GB', {
+			hour: '2-digit',
+			minute: '2-digit',
+			...(withSeconds ? { second: '2-digit' as const } : {}),
+			hour12: true
 		});
 	}
 
@@ -217,7 +255,7 @@
 			class: 'w-24 whitespace-nowrap',
 			render: (row: Message) => `MSG-${String(row.id).padStart(6, '0')}`
 		},
-		{ key: 'to', label: 'Recipient', class: 'font-mono whitespace-nowrap' },
+		{ key: 'to', label: 'Recipient Number', class: 'font-mono whitespace-nowrap' },
 		{
 			key: 'body',
 			label: 'Content',
@@ -227,7 +265,7 @@
 		{ key: 'sender_id', label: 'Sender ID', render: (row: Message) => row.sender_id || '—' },
 		{ key: 'sms_type', label: 'SMS Type', render: (row: Message) => row.sms_type || '—' },
 		{ key: 'parts', label: 'SMS Count' },
-		{ key: 'cost', label: 'Cost (BDT)', money: true },
+		{ key: 'cost', label: 'Cost', money: true },
 		{ key: 'previous_balance', label: 'Previous Balance', render: (row: Message) => money(row.previous_balance) },
 		{ key: 'next_balance', label: 'Next Balance', render: (row: Message) => money(row.next_balance) },
 		{
@@ -237,19 +275,20 @@
 			badgeClass: statusBadgeClass
 		},
 		{ key: 'error_message', label: 'Failure Reason', render: (row: Message) => row.error_message || '—' },
-		{ key: 'operator', label: 'Operator' },
+		{ key: 'operator', label: 'Operator', render: (row: Message) => row.operator || '—' },
 		{ key: 'channel', label: 'Channel', render: (row: Message) => row.channel || '—' },
 		{
 			key: 'submitted_at',
 			label: 'Submit Time',
-			render: (row: Message) => formatDate(row.submitted_at)
+			render: (row: Message) => formatTime(row.sent_at ?? row.submitted_at)
 		},
 		{
 			key: 'delivered_at',
 			label: 'Delivery Time',
-			render: (row: Message) => formatDate(row.delivered_at)
+			render: (row: Message) => formatTime(row.delivered_at, true)
 		},
 		{ key: 'tariff_name', label: 'Tariff', render: (row: Message) => row.tariff_name || '—' },
+		{ key: 'api_user', label: 'API User', render: (row: Message) => row.api_user || '—' },
 		{ key: 'source_ip', label: 'Source IP', render: (row: Message) => row.source_ip || '—' },
 		{ key: 'request_id', label: 'Request ID', render: (row: Message) => row.request_id || '—' }
 	];
@@ -316,13 +355,13 @@
 			onchange={() => load(1)}
 			class="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
 		>
-			<option value="">All Statuses</option>
-			<option value="delivered,sent">Successful (Sent &amp; Delivered)</option>
-			<option value="delivered">Delivered</option>
-			<option value="sent">Sent (Telco)</option>
-			<option value="failed,dlr_failed">Failed (Send &amp; DLR)</option>
-			<option value="failed">Failed</option>
+			<option value="">All Status</option>
 			<option value="pending">Pending</option>
+			<option value="sending">Sending</option>
+			<option value="sent">Sent</option>
+			<option value="delivered">Delivered</option>
+			<option value="failed">Failed</option>
+			<option value="dlr_failed">DLR Failed</option>
 		</select>
 		<input
 			type="date"
@@ -345,7 +384,9 @@
 		rows={messages}
 		{loading}
 		total={meta.total}
-		perPage={meta.per_page}
+		{perPage}
+		perPageOptions={[10, 25, 50]}
+		onPerPageChange={(value) => { perPage = value; load(1); }}
 		currentPage={meta.current_page}
 		onPageChange={(p) => load(p)}
 		onSort={handleSort}
@@ -353,9 +394,11 @@
 		{sortDir}
 		bind:searchValue={search}
 		onSearch={handleSearch}
-		searchPlaceholder="Search by recipient, message, sender…"
+		searchPlaceholder="Search by message ID, recipient, sender…"
 		emptyMessage="No messages found matching your filters."
 		onRowClick={openMessage}
+		groupBy={(row) => row.status}
+		collapsedGroups
 	/>
 </div>
 
@@ -363,25 +406,22 @@
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
 		<div class="relative max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-gray-100 bg-white p-6 shadow-xl dark:border-gray-800 dark:bg-gray-900">
 			<div class="flex items-center justify-between border-b border-gray-100 pb-3 dark:border-gray-800">
-				<h3 class="text-base font-bold text-gray-900 dark:text-white">{detail.msg_id}</h3>
+				<h3 class="text-base font-bold text-gray-900 dark:text-white">Sent Message Detail</h3>
 				<button type="button" onclick={() => (detail = null)} class="text-gray-400 hover:text-gray-600">✕</button>
 			</div>
 			{#if detailLoading}
 				<p class="py-8 text-center text-xs text-gray-400">Loading…</p>
 			{:else}
 				<div class="mt-4 grid gap-3 text-xs sm:grid-cols-2">
-					{#each [{ label: 'Recipient', value: detail.to }, { label: 'Sender ID', value: detail.sender_id || '—' }, { label: 'SMS Type', value: detail.sms_type || '—' }, { label: 'Channel', value: detail.channel || '—' }, { label: 'Status', value: detail.status }, { label: 'Delivery Status', value: detail.delivery_status || '—' }, { label: 'Operator', value: detail.operator || '—' }, { label: 'Cost', value: `৳${Number(detail.cost).toFixed(4)}` }, { label: 'Tariff Rate', value: detail.tariff_name || '—' }, { label: 'Parts', value: String(detail.parts) }, { label: 'Previous Balance', value: detail.previous_balance != null ? `৳${Number(detail.previous_balance).toFixed(2)}` : '—' }, { label: 'Next Balance', value: detail.next_balance != null ? `৳${Number(detail.next_balance).toFixed(2)}` : '—' }, { label: 'Source', value: detail.source || '—' }, { label: 'Source IP', value: detail.source_ip || '—' }, { label: 'Request ID', value: detail.request_id || '—' }, { label: 'Batch', value: detail.batch_id ? `#${detail.batch_id}` : '—' }, { label: 'Submitted', value: formatDate(detail.submitted_at) }, { label: 'Sent', value: formatDate(detail.sent_at) }, { label: 'Delivered', value: formatDate(detail.delivered_at) }, { label: 'Failed', value: formatDate(detail.failed_at) }] as field}
+					{#each [{ label: 'UID', value: detail.uid || '—' }, { label: 'Sender', value: detail.sender_id || '—' }, { label: 'Recipient', value: detail.to }, { label: 'Status', value: detail.status }, { label: 'Cost', value: `BDT ${Number(detail.cost).toFixed(2)}` }, { label: 'Parts', value: String(detail.parts) }, ...(detail.sent_at ? [{ label: 'Sent At', value: formatDate(detail.sent_at) }] : []), ...((detail.error_message || detail.failed_reason) ? [{ label: 'Failed Reason', value: detail.error_message || detail.failed_reason || '' }] : []), { label: 'Created At', value: formatDate(detail.created_at) }, { label: 'Updated At', value: formatDate(detail.updated_at) }] as field}
 						<div class="rounded-lg border border-gray-100 p-2.5 dark:border-gray-800">
 							<p class="text-[10px] uppercase text-gray-400">{field.label}</p>
 							<p class="mt-0.5 font-semibold text-gray-900 dark:text-white">{field.value}</p>
 						</div>
 					{/each}
 				</div>
-				{#if detail.error_message}
-					<p class="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{detail.error_message}</p>
-				{/if}
 				<div class="mt-4">
-					<p class="mb-1 text-[10px] uppercase text-gray-400">Message Body</p>
+					<p class="mb-1 text-[10px] uppercase text-gray-400">Body</p>
 					<div class="whitespace-pre-wrap rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">{detail.body}</div>
 				</div>
 			{/if}

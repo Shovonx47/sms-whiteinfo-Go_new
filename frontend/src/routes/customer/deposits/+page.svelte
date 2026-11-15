@@ -47,24 +47,26 @@
 		}
 	}
 
-	function formatTimeAgo(isoDate: string | null): string {
+	function formatDateTime(isoDate: string | null): string {
 		if (!isoDate) return '—';
 		const date = new Date(isoDate);
-		const now = new Date();
-		const diffMs = now.getTime() - date.getTime();
-		if (diffMs < 0) return 'just now';
-		const diffSec = Math.floor(diffMs / 1000);
-		const diffMin = Math.floor(diffSec / 60);
-		const diffHour = Math.floor(diffMin / 60);
-		const diffDay = Math.floor(diffHour / 24);
+		if (Number.isNaN(date.getTime())) return '—';
+		return date.toLocaleString('en-GB', {
+			day: 'numeric',
+			month: 'short',
+			year: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit',
+			second: '2-digit',
+			hour12: false
+		});
+	}
 
-		if (diffDay > 30) {
-			return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-		}
-		if (diffDay > 0) return `${diffDay}d ago`;
-		if (diffHour > 0) return `${diffHour}h ago`;
-		if (diffMin > 0) return `${diffMin}m ago`;
-		return 'just now';
+	function methodLabel(method: string | null): string {
+		if (!method) return '—';
+		if (method === 'manual') return 'Manual';
+		if (method === 'piprapay') return 'PipraPay';
+		return method;
 	}
 
 	async function load(p = 1) {
@@ -195,7 +197,7 @@
 			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
 				<path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
 			</svg>
-			Make Deposit
+			Top Up
 		</button>
 	</div>
 
@@ -258,30 +260,24 @@
 								</svg>
 							</div>
 						</th>
-						<th class="py-3 px-4 cursor-pointer select-none hover:text-gray-900" onclick={() => toggleSort('paid_at')}>
-							<div class="flex items-center gap-1">
-								<span>PAID AT</span>
-								<svg class="h-3.5 w-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-									<path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-								</svg>
-							</div>
-						</th>
+						<th class="py-3 px-4 font-semibold text-gray-600">PAID AT</th>
+						<th class="py-3 px-4 font-semibold text-gray-600">CREATED AT</th>
 						<th class="py-3 px-4 text-right"></th>
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-gray-100 bg-white">
 					{#if loading}
 						<tr>
-							<td colspan="6" class="py-12 text-center text-gray-500">
+							<td colspan="7" class="py-12 text-center text-gray-500">
 								<div class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-teal-600"></div>
 								<p class="mt-2 text-xs">Loading deposits...</p>
 							</td>
 						</tr>
 					{:else if filteredDeposits.length === 0}
 						<tr>
-							<td colspan="6" class="py-12 text-center text-gray-500">
+							<td colspan="7" class="py-12 text-center text-gray-500">
 								<p class="text-sm font-medium text-gray-700">No deposits found</p>
-								<p class="mt-1 text-xs text-gray-400">Click "Make Deposit" above to recharge your account balance.</p>
+								<p class="mt-1 text-xs text-gray-400">Click "Top Up" above to recharge your account balance.</p>
 							</td>
 						</tr>
 					{:else}
@@ -293,7 +289,7 @@
 								<td class="py-3 px-4 whitespace-nowrap">
 									<span class="inline-flex items-center gap-1.5 rounded-full bg-teal-50 px-2.5 py-0.5 text-xs font-medium text-teal-700 border border-teal-100">
 										<span class="h-1.5 w-1.5 rounded-full bg-teal-600"></span>
-										{deposit.payment_method || 'PipraPay'}
+										{methodLabel(deposit.payment_method)}
 									</span>
 								</td>
 								<td class="py-3 px-4 font-mono text-gray-700 whitespace-nowrap text-xs">
@@ -315,16 +311,19 @@
 											Pending
 										</span>
 									{:else}
-										<span class="inline-flex items-center gap-1 rounded-full bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-700 border border-red-100">
-											<svg class="h-3 w-3 text-red-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+										<span class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium border {deposit.status === 'refunded' ? 'bg-gray-50 text-gray-700 border-gray-200' : 'bg-red-50 text-red-700 border-red-100'}">
+											<svg class="h-3 w-3 {deposit.status === 'refunded' ? 'text-gray-500' : 'text-red-600'}" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
 												<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
 											</svg>
-											{deposit.status}
+											{deposit.status.charAt(0).toUpperCase() + deposit.status.slice(1)}
 										</span>
 									{/if}
 								</td>
 								<td class="py-3 px-4 text-gray-600 whitespace-nowrap">
-									{formatTimeAgo(deposit.paid_at || deposit.created_at)}
+									{deposit.paid_at ? formatDateTime(deposit.paid_at) : '—'}
+								</td>
+								<td class="py-3 px-4 text-gray-600 whitespace-nowrap">
+									{formatDateTime(deposit.created_at)}
 								</td>
 								<td class="py-3 px-4 text-right whitespace-nowrap">
 									<button
@@ -469,31 +468,21 @@
 
 			<div class="mt-4 space-y-3 text-xs">
 				<div class="flex justify-between py-1 border-b border-gray-50">
-					<span class="text-gray-500 font-medium">Transaction ID</span>
-					<span class="font-mono font-semibold text-gray-900">{selectedDeposit.transaction_id || '—'}</span>
-				</div>
-				<div class="flex justify-between py-1 border-b border-gray-50">
 					<span class="text-gray-500 font-medium">Amount</span>
 					<span class="font-semibold text-gray-900">BDT {Number(selectedDeposit.amount).toFixed(2)}</span>
 				</div>
 				<div class="flex justify-between py-1 border-b border-gray-50">
 					<span class="text-gray-500 font-medium">Payment Method</span>
-					<span class="text-gray-900">{selectedDeposit.payment_method || 'PipraPay'}</span>
+					<span class="text-gray-900">{methodLabel(selectedDeposit.payment_method)}</span>
 				</div>
 				<div class="flex justify-between py-1 border-b border-gray-50">
 					<span class="text-gray-500 font-medium">Status</span>
 					<span class="font-semibold capitalize text-teal-700">{selectedDeposit.status}</span>
 				</div>
 				<div class="flex justify-between py-1 border-b border-gray-50">
-					<span class="text-gray-500 font-medium">Created At</span>
-					<span class="text-gray-700">{new Date(selectedDeposit.created_at).toLocaleString()}</span>
+					<span class="text-gray-500 font-medium">Paid At</span>
+					<span class="text-gray-700">{selectedDeposit.paid_at ? new Date(selectedDeposit.paid_at).toLocaleString() : 'Not paid yet'}</span>
 				</div>
-				{#if selectedDeposit.paid_at}
-					<div class="flex justify-between py-1 border-b border-gray-50">
-						<span class="text-gray-500 font-medium">Paid At</span>
-						<span class="text-gray-700">{new Date(selectedDeposit.paid_at).toLocaleString()}</span>
-					</div>
-				{/if}
 			</div>
 
 			<div class="mt-6 flex justify-end">

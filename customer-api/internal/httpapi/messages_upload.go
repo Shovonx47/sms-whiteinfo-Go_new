@@ -76,9 +76,14 @@ func buildCustomerMessagesWhere(userID int64, context fiber.Ctx) (string, []any)
 	args := []any{userID}
 
 	if search := strings.TrimSpace(context.Query("search")); search != "" {
-		conditions = append(conditions, "(m.to LIKE ? OR m.body LIKE ? OR s.sender_id LIKE ?)")
 		like := "%" + search + "%"
-		args = append(args, like, like, like)
+		if id, err := strconv.ParseInt(search, 10, 64); err == nil {
+			conditions = append(conditions, "(m.id = ? OR m.to LIKE ? OR m.body LIKE ? OR s.sender_id LIKE ?)")
+			args = append(args, id, like, like, like)
+		} else {
+			conditions = append(conditions, "(m.to LIKE ? OR m.body LIKE ? OR s.sender_id LIKE ?)")
+			args = append(args, like, like, like)
+		}
 	}
 	if sender := strings.TrimSpace(context.Query("sender_id")); sender != "" {
 		conditions = append(conditions, "(CAST(m.sender_id AS CHAR) = ? OR s.sender_id = ?)")
@@ -350,14 +355,11 @@ func (server *Server) exportBatches(context fiber.Ctx) error {
 		            ORDER BY t.id DESC LIMIT 1),
 		           0.00
 		       ) as previous_balance,
-		       COALESCE(
-		           NULLIF(m.sms_type, ''),
-		           CASE
-		               WHEN b.source_type = 'manual' AND (b.total_recipients = 1 OR b.total_recipients IS NULL) THEN 'Transactional'
-		               WHEN b.source_type = 'single' OR m.batch_id IS NULL THEN 'Transactional'
-		               ELSE 'Promotional'
-		           END
-		       ) as sms_type
+		       CASE
+		           WHEN b.source_type = 'manual' AND (b.total_recipients = 1 OR b.total_recipients IS NULL) THEN 'Transactional'
+		           WHEN b.source_type = 'single' OR m.batch_id IS NULL THEN 'Transactional'
+		           ELSE 'Promotional'
+		       END as sms_type
 		FROM messages m
 		LEFT JOIN senders s ON s.id = m.sender_id
 		LEFT JOIN batches b ON b.id = m.batch_id

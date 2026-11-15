@@ -104,7 +104,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 4. 2026_10_25_140000_add_sp_kyc_verification_to_users_table
 ALTER TABLE `users`
-  ADD COLUMN IF NOT EXISTS `created_by_sp` tinyint(1) NOT NULL DEFAULT 0 AFTER `created_by`,
+  ADD COLUMN IF NOT EXISTS `created_by_sp` tinyint(1) NOT NULL DEFAULT 0 AFTER `created_by_admin`,
   ADD COLUMN IF NOT EXISTS `kyc_sp_verified_by` bigint(20) unsigned DEFAULT NULL AFTER `kyc_verified_at`,
   ADD COLUMN IF NOT EXISTS `kyc_sp_verified_at` timestamp NULL DEFAULT NULL AFTER `kyc_sp_verified_by`;
 

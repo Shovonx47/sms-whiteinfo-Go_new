@@ -53,16 +53,16 @@
 		const lower = (type ?? '').toLowerCase().trim();
 		switch (lower) {
 			case 'alphanumeric':
-			case 'masking':
-				return { label: 'Alphanumeric (Masking)', masking: true };
 			case 'shortcode':
-				return { label: 'Shortcode', masking: true };
+			case 'masking':
+				return { label: 'Masking', masking: true };
 			case 'numeric':
 			case 'non_masking':
 			case 'non-masking':
 			case 'number':
+				return { label: 'Non-masking', masking: false };
 			default:
-				return { label: 'Numeric (Non-Masking)', masking: false };
+				return { label: lower || '—', masking: false };
 		}
 	}
 

@@ -56,9 +56,12 @@
 
 	function formatRef(type: string): string {
 		if (!type) return 'System';
-		if (type.includes('Deposit')) return 'Deposit';
-		if (type.includes('Batch')) return 'Batch';
-		if (type.includes('Message')) return 'Message';
+		const normalized = type.toLowerCase();
+		if (normalized.includes('deposit')) return 'Deposit';
+		if (normalized.includes('sp_distribution') || normalized.includes('spdistribution')) return 'S P Distribution';
+		if (normalized.includes('batch')) return 'Message Batch';
+		if (normalized.includes('message')) return 'Message';
+		if (normalized.includes('campaign')) return 'Campaign';
 		return type;
 	}
 

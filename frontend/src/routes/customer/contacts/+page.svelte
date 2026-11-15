@@ -12,6 +12,13 @@
 		updated_at?: string;
 	}
 
+	interface ContactGroup {
+		id: number;
+		name: string;
+		contacts_count: number;
+		created_at: string;
+	}
+
 	interface Meta {
 		total: number;
 		per_page: number;
@@ -35,6 +42,25 @@
 
 	let viewModalOpen = $state(false);
 	let viewContact = $state<Contact | null>(null);
+	let viewGroups = $state<ContactGroup[]>([]);
+	let viewGroupsLoading = $state(false);
+
+	async function openView(contact: Contact) {
+		viewContact = contact;
+		viewGroups = [];
+		viewModalOpen = true;
+		viewGroupsLoading = true;
+		try {
+			const res = await api.get<{ data: ContactGroup[] }>(
+				`/api/v1/customer/contacts/${contact.id}/groups`
+			);
+			viewGroups = res.data ?? [];
+		} catch {
+			viewGroups = [];
+		} finally {
+			viewGroupsLoading = false;
+		}
+	}
 
 	let createModalOpen = $state(false);
 	let newName = $state('');
@@ -341,7 +367,7 @@
 									<div class="flex items-center justify-end gap-1">
 										<button
 											type="button"
-											onclick={() => { viewContact = contact; viewModalOpen = true; }}
+											onclick={() => openView(contact)}
 											class="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 cursor-pointer"
 											title="View"
 										>
@@ -435,7 +461,8 @@
 						id="contact-name-input"
 						type="text"
 						bind:value={newName}
-						placeholder="Contact name"
+						maxlength="255"
+						placeholder="Enter contact name"
 						class="mt-1.5 w-full rounded-lg border border-gray-300 bg-white py-2 px-3 text-xs text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
 					/>
 				</div>
@@ -446,7 +473,10 @@
 						type="text"
 						bind:value={newPhone}
 						required
-						placeholder="01712345678"
+						maxlength="255"
+						pattern="^(\+?88)?0?1[3-9][0-9]{8}$"
+						title="Please enter a valid 11-digit Bangladeshi mobile number (e.g. 017XXXXXXXX)."
+						placeholder="01712345678 or +8801712345678"
 						class="mt-1.5 w-full font-mono rounded-lg border border-gray-300 bg-white py-2 px-3 text-xs text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
 					/>
 				</div>
@@ -483,6 +513,7 @@
 						id="edit-contact-name"
 						type="text"
 						bind:value={editName}
+						maxlength="255"
 						class="mt-1.5 w-full rounded-lg border border-gray-300 bg-white py-2 px-3 text-xs text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
 					/>
 				</div>
@@ -493,6 +524,9 @@
 						type="text"
 						bind:value={editPhone}
 						required
+						maxlength="255"
+						pattern="^(\+?88)?0?1[3-9][0-9]{8}$"
+						title="Please enter a valid 11-digit Bangladeshi mobile number (e.g. 017XXXXXXXX)."
 						class="mt-1.5 w-full font-mono rounded-lg border border-gray-300 bg-white py-2 px-3 text-xs text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
 					/>
 				</div>
@@ -542,12 +576,6 @@
 					<p class="text-[11px] font-medium uppercase tracking-wider text-gray-400">Phone</p>
 					<p class="mt-1 font-mono font-medium text-gray-900">{viewContact.phone}</p>
 				</div>
-				{#if viewContact.group}
-					<div class="col-span-2">
-						<p class="text-[11px] font-medium uppercase tracking-wider text-gray-400">Group</p>
-						<p class="mt-1 font-medium text-gray-800">{viewContact.group}</p>
-					</div>
-				{/if}
 				<div>
 					<p class="text-[11px] font-medium uppercase tracking-wider text-gray-400">Created At</p>
 					<p class="mt-1 text-gray-700">{new Date(viewContact.created_at).toLocaleString()}</p>
@@ -556,6 +584,37 @@
 					<p class="text-[11px] font-medium uppercase tracking-wider text-gray-400">Updated At</p>
 					<p class="mt-1 text-gray-700">{new Date(viewContact.updated_at || viewContact.created_at).toLocaleString()}</p>
 				</div>
+			</div>
+			<div class="mt-5 border-t border-gray-100 pt-4">
+				<h4 class="text-xs font-bold text-gray-900">Groups</h4>
+				{#if viewGroupsLoading}
+					<p class="mt-2 text-xs text-gray-400">Loading groups...</p>
+				{:else if viewGroups.length === 0}
+					<p class="mt-2 text-xs text-gray-400">This contact does not belong to any group.</p>
+				{:else}
+					<div class="mt-2 overflow-hidden rounded-lg border border-gray-200">
+						<table class="w-full text-left text-xs">
+							<thead class="bg-gray-50 text-[10px] uppercase tracking-wider text-gray-500">
+								<tr>
+									<th class="px-3 py-2">Name</th>
+									<th class="px-3 py-2">Contacts</th>
+									<th class="px-3 py-2">Created At</th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-gray-100">
+								{#each viewGroups as group (group.id)}
+									<tr>
+										<td class="px-3 py-2">
+											<a href="/audience/groups/{group.id}/edit" class="font-semibold text-teal-700 hover:underline">{group.name}</a>
+										</td>
+										<td class="px-3 py-2"><span class="inline-flex rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700">{group.contacts_count}</span></td>
+										<td class="px-3 py-2 text-gray-600">{new Date(group.created_at).toLocaleString()}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
 			</div>
 			<div class="mt-6 flex items-center justify-end gap-3 border-t border-gray-100 pt-3">
 				<button

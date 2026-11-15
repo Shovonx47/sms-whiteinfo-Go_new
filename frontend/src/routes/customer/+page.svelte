@@ -5,20 +5,6 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 
-	type PeriodKey = 'today' | '7_days' | '30_days' | 'all_time';
-
-	interface PeriodSummary {
-		total_sent: number;
-		successful: number;
-		delivered: number;
-		sent_telco: number;
-		failed: number;
-		cost: number;
-		success_rate: number;
-		delivery_rate: number;
-		failed_rate: number;
-	}
-
 	interface RecentMessage {
 		id: number;
 		msg_id: string;
@@ -67,26 +53,13 @@
 		contacts_total: number;
 		groups_total: number;
 		templates_total: number;
-		periods: Record<PeriodKey, PeriodSummary>;
 		recent_messages: RecentMessage[];
 		scheduled_messages: ScheduledBatchItem[];
 	}
 
-	const emptyPeriod: PeriodSummary = {
-		total_sent: 0,
-		successful: 0,
-		delivered: 0,
-		sent_telco: 0,
-		failed: 0,
-		cost: 0,
-		success_rate: 0,
-		delivery_rate: 0,
-		failed_rate: 0
-	};
-
 	let stats = $state<DashboardStats | null>(null);
 	let loadingStats = $state(true);
-	let selectedPeriod = $state<PeriodKey>('today');
+	let loadError = $state(false);
 
 	// Column visibility toggles & sorting for the two tables
 	let showRecentColMenu = $state(false);
@@ -96,7 +69,7 @@
 		body: true,
 		status: true,
 		cost: true,
-		sent_at: false
+		sent_at: true
 	});
 
 	let showScheduledColMenu = $state(false);
@@ -117,37 +90,11 @@
 		try {
 			const res = await api.get<{ data: DashboardStats }>('/api/v1/customer/dashboard/stats');
 			stats = res.data;
-		} catch {
+			loadError = false;
+		} catch (err) {
+			loadError = true;
 			if (!stats) {
-				stats = {
-					balance: Number(auth.balance ?? 0),
-					messages_today: 0,
-					successful_today: 0,
-					delivered_today: 0,
-					sent_telco_today: 0,
-					failed_today: 0,
-					cost_today: 0,
-					success_rate_today: 100,
-					delivery_rate: 0,
-					messages_all_time: 0,
-					successful_all_time: 0,
-					delivered_all_time: 0,
-					sent_telco_all_time: 0,
-					failed_all_time: 0,
-					cost_all_time: 0,
-					scheduled_count: 0,
-					contacts_total: 0,
-					groups_total: 0,
-					templates_total: 0,
-					periods: {
-						today: { ...emptyPeriod },
-						'7_days': { ...emptyPeriod },
-						'30_days': { ...emptyPeriod },
-						all_time: { ...emptyPeriod }
-					},
-					recent_messages: [],
-					scheduled_messages: []
-				};
+				toast.error('Dashboard unavailable', 'Could not load your dashboard data. Please retry.');
 			}
 		} finally {
 			loadingStats = false;
@@ -176,6 +123,13 @@
 		const num = Number(val ?? 0);
 		if (Number.isNaN(num)) return '0';
 		return new Intl.NumberFormat('en-US').format(num);
+	}
+
+	function formatAbbreviated(val: number | string | undefined | null): string {
+		const num = Number(val ?? 0);
+		if (Number.isNaN(num)) return '0';
+		if (Math.abs(num) < 1000) return String(num);
+		return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(num);
 	}
 
 	function formatDateTime(iso: string | null): string {
@@ -230,7 +184,7 @@
 		{
 			title: 'MESSAGES TODAY',
 			value: formatInt(stats?.messages_today ?? 0),
-			description: `${formatInt(stats?.messages_all_time ?? 0)} total messages sent`,
+			description: 'Sent today',
 			icon: '/images/icons/messages-today.svg',
 			href: '/customer/messages',
 			bgGradient: 'from-blue-500/10 to-sky-500/5',
@@ -252,9 +206,9 @@
 		{
 			title: 'FAILED TODAY',
 			value: formatInt(stats?.failed_today ?? 0),
-			description: `${formatInt(stats?.failed_all_time ?? 0)} total failed all-time`,
+			description: 'Send & delivery failures',
 			icon: '/images/icons/failed-today.svg',
-			href: '/customer/messages?status=failed,dlr_failed',
+			href: '/customer/messages',
 			bgGradient:
 				(stats?.failed_today ?? 0) > 0
 					? 'from-rose-500/10 to-red-500/5'
@@ -299,7 +253,7 @@
 		},
 		{
 			title: 'TOTAL CONTACTS',
-			value: formatInt(stats?.contacts_total ?? 0),
+			value: formatAbbreviated(stats?.contacts_total ?? 0),
 			description: 'In your lists',
 			icon: '/images/icons/contacts.svg',
 			href: '/customer/contacts',
@@ -310,7 +264,7 @@
 		},
 		{
 			title: 'GROUPS',
-			value: formatInt(stats?.groups_total ?? 0),
+			value: formatAbbreviated(stats?.groups_total ?? 0),
 			description: 'Contact groups',
 			icon: '/images/icons/contacts.svg',
 			href: '/customer/groups',
@@ -321,7 +275,7 @@
 		},
 		{
 			title: 'TEMPLATES',
-			value: formatInt(stats?.templates_total ?? 0),
+			value: formatAbbreviated(stats?.templates_total ?? 0),
 			description: 'Message templates',
 			icon: '/images/icons/templates.svg',
 			href: '/customer/templates',
@@ -331,33 +285,6 @@
 			badgeColor: 'text-cyan-700 dark:text-cyan-400 bg-cyan-50 dark:bg-cyan-950/60'
 		}
 	]);
-
-	const periodTabs: { key: PeriodKey; label: string }[] = [
-		{ key: 'today', label: 'Today' },
-		{ key: '7_days', label: '7 Days' },
-		{ key: '30_days', label: '30 Days' },
-		{ key: 'all_time', label: 'All Time' }
-	];
-
-	const activePeriodStats = $derived<PeriodSummary>(
-		stats?.periods?.[selectedPeriod] ?? emptyPeriod
-	);
-
-	const deliveredBarWidth = $derived(
-		activePeriodStats.total_sent > 0
-			? Math.max(0, Math.min(100, (activePeriodStats.delivered / activePeriodStats.total_sent) * 100))
-			: 0
-	);
-	const sentTelcoBarWidth = $derived(
-		activePeriodStats.total_sent > 0
-			? Math.max(0, Math.min(100, (activePeriodStats.sent_telco / activePeriodStats.total_sent) * 100))
-			: 0
-	);
-	const failedBarWidth = $derived(
-		activePeriodStats.total_sent > 0
-			? Math.max(0, Math.min(100, (activePeriodStats.failed / activePeriodStats.total_sent) * 100))
-			: 0
-	);
 
 	const recentMessages = $derived<RecentMessage[]>(stats?.recent_messages ?? []);
 
@@ -399,9 +326,20 @@
 		</a>
 	</div>
 
+	{#if loadError && !stats}
+		<div class="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center dark:border-rose-900/60 dark:bg-rose-950/30">
+			<p class="text-sm font-semibold text-rose-800 dark:text-rose-300">Unable to load dashboard data.</p>
+			<p class="mt-1 text-xs text-rose-600 dark:text-rose-400">Check your connection and try again.</p>
+			<button
+				type="button"
+				onclick={() => loadStats()}
+				class="mt-3 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
+			>Retry</button>
+		</div>
+	{:else}
 	<!-- 9 Overview Cards Grid (3x3) -->
 	<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
-		{#each overviewCards as card (card.title)}
+		{#each [overviewCards[0], overviewCards[1], overviewCards[5], overviewCards[4], overviewCards[2], overviewCards[3], overviewCards[6], overviewCards[7], overviewCards[8]] as card (card.title)}
 			<a
 				href={card.href}
 				class="group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-gray-200/80 bg-white p-5 shadow-xs transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md dark:border-gray-800 dark:bg-gray-900 {card.borderColor}"
@@ -466,169 +404,6 @@
 				</div>
 			</a>
 		{/each}
-	</div>
-
-	<!-- SMS Delivery & Success Report Widget -->
-	<div class="rounded-2xl border border-gray-200/80 bg-white p-5 sm:p-6 shadow-xs dark:border-gray-800 dark:bg-gray-900">
-		<!-- Widget Header -->
-		<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-			<div class="flex items-center gap-3.5">
-				<div
-					class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50/70 text-emerald-600 dark:border-emerald-800/60 dark:bg-emerald-950/50 dark:text-emerald-400"
-				>
-					<svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-					</svg>
-				</div>
-				<div>
-					<h2 class="text-base font-bold text-gray-950 dark:text-white">
-						SMS Delivery &amp; Success Report
-					</h2>
-					<p class="text-xs text-gray-500 dark:text-gray-400">
-						Live SMS delivery and success status report
-					</p>
-				</div>
-			</div>
-
-			<!-- Period Switcher Tabs -->
-			<div class="inline-flex items-center self-start sm:self-auto rounded-xl bg-gray-100 p-1 dark:bg-gray-800">
-				{#each periodTabs as tab (tab.key)}
-					<button
-						type="button"
-						onclick={() => (selectedPeriod = tab.key)}
-						class="rounded-lg px-3 py-1.5 text-xs transition-all {selectedPeriod === tab.key
-							? 'bg-white font-semibold text-gray-900 shadow-2xs dark:bg-gray-900 dark:text-white'
-							: 'font-medium text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'}"
-					>
-						{tab.label}
-					</button>
-				{/each}
-			</div>
-		</div>
-
-		<!-- 4 Period Metric Cards -->
-		<div class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-			<!-- 1. Total Sent -->
-			<div class="rounded-xl border border-gray-100 bg-gray-50/70 p-4 dark:border-gray-800 dark:bg-gray-800/40">
-				<div class="text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-					TOTAL SENT
-				</div>
-				<div class="mt-1.5 text-2xl font-extrabold text-gray-950 dark:text-white">
-					{formatInt(activePeriodStats.total_sent)}
-				</div>
-				<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-					Cost: {formatMoney(activePeriodStats.cost)} BDT
-				</div>
-			</div>
-
-			<!-- 2. Successful SMS -->
-			<div class="rounded-xl border border-emerald-300/80 bg-emerald-50/30 p-4 dark:border-emerald-800/60 dark:bg-emerald-950/20">
-				<div class="flex items-center justify-between gap-2">
-					<span class="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-						SUCCESSFUL SMS
-					</span>
-					<span class="rounded-md bg-emerald-100 px-1.5 py-0.5 text-[11px] font-bold text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300">
-						{activePeriodStats.success_rate}%
-					</span>
-				</div>
-				<div class="mt-1.5 text-2xl font-extrabold text-emerald-700 dark:text-emerald-400">
-					{formatInt(activePeriodStats.successful)}
-				</div>
-				<div class="mt-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
-					{formatInt(activePeriodStats.delivered)} handset delivered
-				</div>
-			</div>
-
-			<!-- 3. Failed SMS -->
-			<div class="rounded-xl border border-gray-200/90 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-				<div class="text-[11px] font-bold uppercase tracking-wider text-rose-700 dark:text-rose-400">
-					FAILED SMS
-				</div>
-				<div class="mt-1.5 text-2xl font-extrabold text-rose-800 dark:text-rose-400">
-					{formatInt(activePeriodStats.failed)}
-				</div>
-				<div class="mt-1 text-xs font-medium text-rose-600 dark:text-rose-400">
-					{activePeriodStats.failed > 0 ? `${activePeriodStats.failed_rate}% failure rate` : 'No failures'}
-				</div>
-			</div>
-
-			<!-- 4. Delivery Rate -->
-			<div class="rounded-xl border border-gray-200/90 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-				<div class="text-[11px] font-bold uppercase tracking-wider text-blue-700 dark:text-blue-400">
-					DELIVERY RATE
-				</div>
-				<div class="mt-1.5 text-2xl font-extrabold text-blue-600 dark:text-blue-400">
-					{activePeriodStats.delivery_rate}%
-				</div>
-				<div class="mt-1 text-xs font-medium text-blue-600 dark:text-blue-400">
-					Handset confirmed
-				</div>
-			</div>
-		</div>
-
-		<!-- Delivery Breakdown Bar -->
-		<div class="mt-5">
-			<div class="mb-2 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-				<span>Delivery Breakdown</span>
-				<span>{formatInt(activePeriodStats.total_sent)} messages</span>
-			</div>
-			<div class="flex h-2.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
-				{#if deliveredBarWidth > 0}
-					<div
-						class="h-full bg-emerald-500 transition-all duration-300"
-						style="width: {deliveredBarWidth}%"
-						title="Delivered: {activePeriodStats.delivered}"
-					></div>
-				{/if}
-				{#if sentTelcoBarWidth > 0}
-					<div
-						class="h-full bg-sky-500 transition-all duration-300"
-						style="width: {sentTelcoBarWidth}%"
-						title="Sent (Telco): {activePeriodStats.sent_telco}"
-					></div>
-				{/if}
-				{#if failedBarWidth > 0}
-					<div
-						class="h-full bg-rose-500 transition-all duration-300"
-						style="width: {failedBarWidth}%"
-						title="Failed: {activePeriodStats.failed}"
-					></div>
-				{/if}
-			</div>
-			<div class="mt-2.5 flex flex-wrap items-center gap-5 text-xs text-gray-600 dark:text-gray-400">
-				<span class="inline-flex items-center gap-1.5">
-					<span class="h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
-					Delivered: <strong class="font-bold text-gray-900 dark:text-white">{formatInt(activePeriodStats.delivered)}</strong>
-				</span>
-				<span class="inline-flex items-center gap-1.5">
-					<span class="h-2.5 w-2.5 rounded-full bg-sky-500"></span>
-					Sent (Telco): <strong class="font-bold text-gray-900 dark:text-white">{formatInt(activePeriodStats.sent_telco)}</strong>
-				</span>
-				<span class="inline-flex items-center gap-1.5">
-					<span class="h-2.5 w-2.5 rounded-full bg-rose-500"></span>
-					Failed: <strong class="font-bold text-gray-900 dark:text-white">{formatInt(activePeriodStats.failed)}</strong>
-				</span>
-			</div>
-		</div>
-
-		<!-- Footer Action Links -->
-		<div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-4 dark:border-gray-800">
-			<a
-				href="/customer/messages?status=delivered,sent"
-				class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 dark:bg-emerald-950/60 dark:text-emerald-300 dark:hover:bg-emerald-900/60"
-			>
-				<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
-					<path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-				</svg>
-				View Successful Messages ({formatInt(activePeriodStats.successful)})
-			</a>
-			<a
-				href="/customer/messages"
-				class="inline-flex items-center gap-1 text-xs font-medium text-gray-500 transition hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
-			>
-				Detailed Message Log →
-			</a>
-		</div>
 	</div>
 
 	<!-- Recent SMS Table Widget -->
@@ -741,7 +516,7 @@
 						{#each recentMessages as msg (msg.id)}
 							<tr
 								class="cursor-pointer transition hover:bg-gray-50/70 dark:hover:bg-gray-800/40"
-								onclick={() => goto('/customer/messages')}
+								onclick={() => goto(`/customer/messages?view=${msg.id}`)}
 							>
 								{#if recentCols.recipient}
 									<td class="whitespace-nowrap px-6 py-3.5">
@@ -1036,4 +811,5 @@
 			</table>
 		</div>
 	</div>
+	{/if}
 </div>

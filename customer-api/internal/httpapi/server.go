@@ -267,6 +267,7 @@ func (server *Server) App() *fiber.App {
 	protected.Get("/contacts/export", server.exportContacts)
 	protected.Post("/contacts", server.createContact)
 	protected.Post("/contacts/bulk-delete", server.bulkDeleteContacts)
+	protected.Get("/contacts/:id/groups", server.contactGroups)
 	protected.Put("/contacts/:id", server.updateContact)
 	protected.Delete("/contacts/:id", server.deleteContact)
 

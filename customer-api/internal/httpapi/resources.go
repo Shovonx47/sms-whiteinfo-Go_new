@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -223,18 +224,30 @@ func (server *Server) createContact(context fiber.Ctx) error {
 
 	req.Name = strings.TrimSpace(req.Name)
 	req.Phone = strings.TrimSpace(req.Phone)
+	if len(req.Name) > 255 {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+			"message": "The name must not be greater than 255 characters.",
+			"errors":  fiber.Map{"name": []string{"The name must not be greater than 255 characters."}},
+		})
+	}
 	if req.Phone == "" {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"message": "Phone number is required.",
-			"errors":  fiber.Map{"phone": []string{"Phone number is required."}},
+			"message": "The phone field is required.",
+			"errors":  fiber.Map{"phone": []string{"The phone field is required."}},
+		})
+	}
+	if len(req.Phone) > 255 {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+			"message": "The phone must not be greater than 255 characters.",
+			"errors":  fiber.Map{"phone": []string{"The phone must not be greater than 255 characters."}},
 		})
 	}
 
 	normalizedPhone, ok := normalizeBDContactPhone(req.Phone)
 	if !ok {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"message": "Please enter a valid Bangladeshi mobile number (e.g. 017XXXXXXXX or +8801XXXXXXXX).",
-			"errors":  fiber.Map{"phone": []string{"Please enter a valid Bangladeshi mobile number (e.g. 017XXXXXXXX or +8801XXXXXXXX)."}},
+			"message": "Please enter a valid 11-digit Bangladeshi mobile number (e.g. 017XXXXXXXX).",
+			"errors":  fiber.Map{"phone": []string{"Please enter a valid 11-digit Bangladeshi mobile number (e.g. 017XXXXXXXX)."}},
 		})
 	}
 
@@ -244,7 +257,7 @@ func (server *Server) createContact(context fiber.Ctx) error {
 		claims.UserID, normalizedPhone,
 	).Scan(&existingID); err == nil && existingID > 0 {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"message": "A contact with this phone number already exists.",
+			"message": "The phone has already been taken.",
 			"errors":  fiber.Map{"phone": []string{"The phone has already been taken."}},
 		})
 	}
@@ -288,11 +301,11 @@ func (server *Server) deleteContact(context fiber.Ctx) error {
 	claims := customer(context)
 	id := context.Params("id")
 
-	_, _ = server.db.Exec(
-		"DELETE cg FROM contact_group cg INNER JOIN contacts c ON c.id = cg.contact_id WHERE cg.contact_id = ? AND c.user_id = ?",
-		id, claims.UserID,
+	now := time.Now()
+	result, err := server.db.Exec(
+		"UPDATE contacts SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+		now, now, id, claims.UserID,
 	)
-	result, err := server.db.Exec("DELETE FROM contacts WHERE id = ? AND user_id = ?", id, claims.UserID)
 	if err != nil {
 		return databaseError(context, err)
 	}
@@ -303,6 +316,59 @@ func (server *Server) deleteContact(context fiber.Ctx) error {
 	}
 
 	return context.JSON(fiber.Map{"message": "Contact deleted successfully."})
+}
+
+// contactGroups returns the groups a contact belongs to, mirroring the read-only
+// GroupsRelationManager on the customer contact view page.
+func (server *Server) contactGroups(context fiber.Ctx) error {
+	claims := customer(context)
+	id := context.Params("id")
+
+	var contactID int64
+	if err := server.db.QueryRow(
+		"SELECT id FROM contacts WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+		id, claims.UserID,
+	).Scan(&contactID); err == sql.ErrNoRows {
+		return context.Status(http.StatusNotFound).JSON(fiber.Map{"message": "Contact not found."})
+	} else if err != nil {
+		return databaseError(context, err)
+	}
+
+	rows, err := server.db.Query(`
+		SELECT g.id, g.name, g.description,
+		       (SELECT COUNT(*) FROM contact_group cg2 INNER JOIN contacts c2 ON c2.id = cg2.contact_id AND c2.deleted_at IS NULL WHERE cg2.group_id = g.id) AS contacts_count,
+		       g.created_at, g.updated_at
+		FROM `+"`groups`"+` g
+		INNER JOIN contact_group cg ON cg.group_id = g.id
+		WHERE cg.contact_id = ? AND g.user_id = ? AND g.deleted_at IS NULL
+		ORDER BY g.name ASC
+	`, contactID, claims.UserID)
+	if err != nil {
+		return databaseError(context, err)
+	}
+	defer rows.Close()
+
+	items := []fiber.Map{}
+	for rows.Next() {
+		var gid int64
+		var name string
+		var description sql.NullString
+		var contactsCount int
+		var createdAt, updatedAt sql.NullTime
+		if err := rows.Scan(&gid, &name, &description, &contactsCount, &createdAt, &updatedAt); err != nil {
+			continue
+		}
+		items = append(items, fiber.Map{
+			"id":             gid,
+			"name":           name,
+			"description":    description.String,
+			"contacts_count": contactsCount,
+			"created_at":     devTimePtr(createdAt),
+			"updated_at":     devTimePtr(updatedAt),
+		})
+	}
+
+	return context.JSON(fiber.Map{"data": items})
 }
 
 func (server *Server) updateContact(context fiber.Ctx) error {
@@ -319,18 +385,30 @@ func (server *Server) updateContact(context fiber.Ctx) error {
 
 	req.Name = strings.TrimSpace(req.Name)
 	req.Phone = strings.TrimSpace(req.Phone)
+	if len(req.Name) > 255 {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+			"message": "The name must not be greater than 255 characters.",
+			"errors":  fiber.Map{"name": []string{"The name must not be greater than 255 characters."}},
+		})
+	}
 	if req.Phone == "" {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"message": "Phone number is required.",
-			"errors":  fiber.Map{"phone": []string{"Phone number is required."}},
+			"message": "The phone field is required.",
+			"errors":  fiber.Map{"phone": []string{"The phone field is required."}},
+		})
+	}
+	if len(req.Phone) > 255 {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+			"message": "The phone must not be greater than 255 characters.",
+			"errors":  fiber.Map{"phone": []string{"The phone must not be greater than 255 characters."}},
 		})
 	}
 
 	normalizedPhone, ok := normalizeBDContactPhone(req.Phone)
 	if !ok {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"message": "Please enter a valid Bangladeshi mobile number (e.g. 017XXXXXXXX or +8801XXXXXXXX).",
-			"errors":  fiber.Map{"phone": []string{"Please enter a valid Bangladeshi mobile number (e.g. 017XXXXXXXX or +8801XXXXXXXX)."}},
+			"message": "Please enter a valid 11-digit Bangladeshi mobile number (e.g. 017XXXXXXXX).",
+			"errors":  fiber.Map{"phone": []string{"Please enter a valid 11-digit Bangladeshi mobile number (e.g. 017XXXXXXXX)."}},
 		})
 	}
 
@@ -348,7 +426,7 @@ func (server *Server) updateContact(context fiber.Ctx) error {
 		claims.UserID, normalizedPhone, id,
 	).Scan(&duplicateID); err == nil && duplicateID > 0 {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
-			"message": "A contact with this phone number already exists.",
+			"message": "The phone has already been taken.",
 			"errors":  fiber.Map{"phone": []string{"The phone has already been taken."}},
 		})
 	}
@@ -404,8 +482,8 @@ func (server *Server) groups(context fiber.Ctx) error {
 	args = append(args, perPage, offset)
 	rows, err := server.db.Query(`
 		SELECT g.id, g.name, COALESCE(g.description, ''),
-		       (SELECT COUNT(*) FROM contact_group cg WHERE cg.group_id = g.id) as contacts_count,
-		       g.created_at
+		       (SELECT COUNT(*) FROM contact_group cg INNER JOIN contacts c ON c.id = cg.contact_id AND c.deleted_at IS NULL WHERE cg.group_id = g.id) as contacts_count,
+		       g.created_at, g.updated_at
 		FROM groups g
 		`+where+`
 		ORDER BY g.id DESC
@@ -420,9 +498,9 @@ func (server *Server) groups(context fiber.Ctx) error {
 	for rows.Next() {
 		var id, contactsCount int
 		var name, description string
-		var createdAt time.Time
+		var createdAt, updatedAt time.Time
 
-		if err := rows.Scan(&id, &name, &description, &contactsCount, &createdAt); err != nil {
+		if err := rows.Scan(&id, &name, &description, &contactsCount, &createdAt, &updatedAt); err != nil {
 			continue
 		}
 		items = append(items, fiber.Map{
@@ -431,6 +509,7 @@ func (server *Server) groups(context fiber.Ctx) error {
 			"description":    description,
 			"contacts_count": contactsCount,
 			"created_at":     createdAt.Format(time.RFC3339),
+			"updated_at":     updatedAt.Format(time.RFC3339),
 		})
 	}
 
@@ -556,15 +635,16 @@ func (server *Server) groupDetail(context fiber.Ctx) error {
 		Description   string    `json:"description"`
 		ContactsCount int       `json:"contacts_count"`
 		CreatedAt     time.Time `json:"created_at"`
+		UpdatedAt     time.Time `json:"updated_at"`
 	}
 
 	err := server.db.QueryRow(`
 		SELECT g.id, g.name, COALESCE(g.description, ''),
-		       (SELECT COUNT(*) FROM contact_group cg WHERE cg.group_id = g.id),
-		       g.created_at
+		       (SELECT COUNT(*) FROM contact_group cg INNER JOIN contacts c ON c.id = cg.contact_id AND c.deleted_at IS NULL WHERE cg.group_id = g.id),
+		       g.created_at, g.updated_at
 		FROM groups g
 		WHERE g.id = ? AND g.user_id = ? AND g.deleted_at IS NULL
-	`, id, claims.UserID).Scan(&group.ID, &group.Name, &group.Description, &group.ContactsCount, &group.CreatedAt)
+	`, id, claims.UserID).Scan(&group.ID, &group.Name, &group.Description, &group.ContactsCount, &group.CreatedAt, &group.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return context.Status(http.StatusNotFound).JSON(fiber.Map{"message": "Group not found."})
@@ -580,6 +660,7 @@ func (server *Server) groupDetail(context fiber.Ctx) error {
 			"description":    group.Description,
 			"contacts_count": group.ContactsCount,
 			"created_at":     group.CreatedAt.Format(time.RFC3339),
+			"updated_at":     group.UpdatedAt.Format(time.RFC3339),
 		},
 	})
 }
@@ -774,9 +855,10 @@ func (server *Server) deleteGroup(context fiber.Ctx) error {
 	claims := customer(context)
 	id := context.Params("id")
 
+	now := time.Now()
 	result, err := server.db.Exec(
-		"DELETE FROM groups WHERE id = ? AND user_id = ?",
-		id, claims.UserID,
+		"UPDATE `groups` SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+		now, now, id, claims.UserID,
 	)
 	if err != nil {
 		return databaseError(context, err)
@@ -1791,42 +1873,53 @@ func (server *Server) analyticsMessaging(context fiber.Ctx) error {
 
 func (server *Server) analyticsBilling(context fiber.Ctx) error {
 	claims := customer(context)
-	fromTime, toTime := resolveAnalyticsDateRange(context.Query("range", "30d"), context.Query("from"), context.Query("to"))
+	fromTime, toTime := resolveAnalyticsDateRange(context.Query("range", "last_30_days"), context.Query("from"), context.Query("to"))
 	from := fromTime.Format("2006-01-02 15:04:05")
 	to := toTime.Format("2006-01-02 15:04:05")
 
 	var deposits, spent, pendingDeposits float64
 	var txCount int
 
-	_ = server.db.QueryRow(
+	if err := server.db.QueryRowContext(context.Context(),
 		"SELECT COALESCE(SUM(amount),0) FROM deposits WHERE user_id = ? AND status = 'completed' AND created_at >= ? AND created_at <= ?",
 		claims.UserID, from, to,
-	).Scan(&deposits)
+	).Scan(&deposits); err != nil {
+		return databaseError(context, err)
+	}
 
-	_ = server.db.QueryRow(
+	if err := server.db.QueryRowContext(context.Context(),
 		"SELECT COALESCE(SUM(cost),0) FROM messages WHERE user_id = ? AND status != 'failed' AND created_at >= ? AND created_at <= ?",
 		claims.UserID, from, to,
-	).Scan(&spent)
+	).Scan(&spent); err != nil {
+		return databaseError(context, err)
+	}
 
-	_ = server.db.QueryRow(
+	if err := server.db.QueryRowContext(context.Context(),
 		"SELECT COALESCE(SUM(amount),0) FROM deposits WHERE user_id = ? AND status = 'pending'",
 		claims.UserID,
-	).Scan(&pendingDeposits)
+	).Scan(&pendingDeposits); err != nil {
+		return databaseError(context, err)
+	}
 
-	_ = server.db.QueryRow(
+	if err := server.db.QueryRowContext(context.Context(),
 		"SELECT COUNT(*) FROM transactions WHERE user_id = ? AND created_at >= ? AND created_at <= ?",
 		claims.UserID, from, to,
-	).Scan(&txCount)
+	).Scan(&txCount); err != nil {
+		return databaseError(context, err)
+	}
 
 	// Deposit trend: completed deposits per day
 	depositTrend := []fiber.Map{}
-	dtRows, _ := server.db.Query(
+	dtRows, err := server.db.QueryContext(context.Context(),
 		`SELECT DATE(created_at) as d, COALESCE(SUM(amount),0) FROM deposits
 		 WHERE user_id = ? AND status = 'completed' AND created_at >= ? AND created_at <= ?
 		 GROUP BY d ORDER BY d ASC`,
 		claims.UserID, from, to,
 	)
-	if dtRows != nil {
+	if err != nil {
+		return databaseError(context, err)
+	}
+	{
 		defer dtRows.Close()
 		for dtRows.Next() {
 			var d string
@@ -1841,13 +1934,16 @@ func (server *Server) analyticsBilling(context fiber.Ctx) error {
 
 	// Spend trend: cost per day from messages
 	spendTrend := []fiber.Map{}
-	stRows, _ := server.db.Query(
+	stRows, err := server.db.QueryContext(context.Context(),
 		`SELECT DATE(created_at) as d, COALESCE(SUM(cost),0) FROM messages
 		 WHERE user_id = ? AND status != 'failed' AND created_at >= ? AND created_at <= ?
 		 GROUP BY d ORDER BY d ASC`,
 		claims.UserID, from, to,
 	)
-	if stRows != nil {
+	if err != nil {
+		return databaseError(context, err)
+	}
+	{
 		defer stRows.Close()
 		for stRows.Next() {
 			var d string
@@ -1862,13 +1958,16 @@ func (server *Server) analyticsBilling(context fiber.Ctx) error {
 
 	// Deposits by payment method
 	methods := []fiber.Map{}
-	mRows, _ := server.db.Query(
+	mRows, err := server.db.QueryContext(context.Context(),
 		`SELECT COALESCE(payment_method,'Unknown') as method, COALESCE(SUM(amount),0) as total FROM deposits
 		 WHERE user_id = ? AND status = 'completed' AND created_at >= ? AND created_at <= ?
 		 GROUP BY method ORDER BY total DESC`,
 		claims.UserID, from, to,
 	)
-	if mRows != nil {
+	if err != nil {
+		return databaseError(context, err)
+	}
+	{
 		defer mRows.Close()
 		for mRows.Next() {
 			var method string
@@ -1882,7 +1981,7 @@ func (server *Server) analyticsBilling(context fiber.Ctx) error {
 
 	// Transaction volume: credits vs debits per day
 	volume := []fiber.Map{}
-	vRows, _ := server.db.Query(
+	vRows, err := server.db.QueryContext(context.Context(),
 		`SELECT DATE(created_at) as d,
 		        COALESCE(SUM(CASE WHEN direction = 'credit' THEN amount ELSE 0 END),0) as credits,
 		        COALESCE(SUM(CASE WHEN direction = 'debit' THEN amount ELSE 0 END),0) as debits
@@ -1891,7 +1990,10 @@ func (server *Server) analyticsBilling(context fiber.Ctx) error {
 		 GROUP BY d ORDER BY d ASC`,
 		claims.UserID, from, to,
 	)
-	if vRows != nil {
+	if err != nil {
+		return databaseError(context, err)
+	}
+	{
 		defer vRows.Close()
 		for vRows.Next() {
 			var d string
@@ -1927,6 +2029,13 @@ func (server *Server) analyticsBilling(context fiber.Ctx) error {
 
 func (server *Server) liveQueue(context fiber.Ctx) error {
 	claims := customer(context)
+	limit, _ := strconv.Atoi(context.Query("limit", "30"))
+	if limit < 10 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
+	}
 	fiveMinAgo := time.Now().Add(-5 * time.Minute)
 	recentThreshold := time.Now().Add(-10 * time.Second)
 
@@ -1934,7 +2043,7 @@ func (server *Server) liveQueue(context fiber.Ctx) error {
 	var inQueue int
 	_ = server.db.QueryRow(`
 		SELECT COUNT(*) FROM messages
-		WHERE user_id = ? AND status IN ('pending', 'sending', 'processing')
+		WHERE user_id = ? AND status IN ('pending', 'sending')
 	`, claims.UserID).Scan(&inQueue)
 
 	// Last 5 min aggregation
@@ -1959,7 +2068,7 @@ func (server *Server) liveQueue(context fiber.Ctx) error {
 	var activeBatchesCount int
 	_ = server.db.QueryRow(`
 		SELECT COUNT(*) FROM batches
-		WHERE user_id = ? AND status IN ('pending', 'processing')
+		WHERE user_id = ? AND status = 'processing'
 	`, claims.UserID).Scan(&activeBatchesCount)
 
 	// Active batches details
@@ -1968,7 +2077,7 @@ func (server *Server) liveQueue(context fiber.Ctx) error {
 		       COALESCE(b.body, ''), COALESCE(s.sender_id, '—'), b.created_at
 		FROM batches b
 		LEFT JOIN senders s ON s.id = b.sender_id
-		WHERE b.user_id = ? AND b.status IN ('pending', 'processing')
+		WHERE b.user_id = ? AND b.status = 'processing'
 		ORDER BY b.id DESC
 		LIMIT 10
 	`, claims.UserID)
@@ -2021,8 +2130,8 @@ func (server *Server) liveQueue(context fiber.Ctx) error {
 			OR m.updated_at >= ?
 		)
 		ORDER BY m.id DESC
-		LIMIT 60
-	`, claims.UserID, recentThreshold)
+		LIMIT ?
+	`, claims.UserID, recentThreshold, limit)
 
 	items := []fiber.Map{}
 	if msgRows != nil {

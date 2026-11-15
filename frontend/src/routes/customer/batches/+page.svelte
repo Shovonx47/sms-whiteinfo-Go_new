@@ -2,6 +2,7 @@
 	import { api } from '$lib/api.js';
 	import { toast } from '$lib/stores/toast.svelte.js';
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 
 	interface MessageLog {
 		id: number;
@@ -11,12 +12,13 @@
 		status: string;
 		cost: string;
 		parts: number;
-		previous_balance: string;
-		next_balance: string;
+		previous_balance: string | null;
+		next_balance: string | null;
 		sms_type: string;
 		created_at: string;
 		sent_at?: string;
 		delivered_at?: string;
+		failed_at?: string;
 		failed_reason?: string;
 	}
 
@@ -39,7 +41,12 @@
 	}
 
 	function displayDate(log: MessageLog): string {
-		return formatDateTime(log.delivered_at ?? log.sent_at ?? log.created_at);
+		return formatDateTime(log.delivered_at ?? log.sent_at ?? log.failed_at ?? log.created_at);
+	}
+
+	function moneyOrDash(value: string | null | undefined): string {
+		if (value === null || value === undefined || value === '') return '—';
+		return Number(value).toFixed(2);
 	}
 
 	let logs = $state<MessageLog[]>([]);
@@ -60,9 +67,6 @@
 	let exportModalOpen = $state(false);
 	let exportFormat = $state<'excel' | 'pdf'>('excel');
 	let exporting = $state(false);
-
-	// View detail modal
-	let selectedLog = $state<MessageLog | null>(null);
 
 	async function loadSenders() {
 		try {
@@ -223,10 +227,12 @@
 						class="w-full rounded-lg border border-gray-300 bg-white py-1.5 px-3 text-xs text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
 					>
 						<option value="">All Status</option>
+						<option value="pending">Pending</option>
+						<option value="sending">Sending</option>
 						<option value="sent">Sent</option>
 						<option value="delivered">Delivered</option>
-						<option value="pending">Pending</option>
 						<option value="failed">Failed</option>
+						<option value="dlr_failed">DLR Failed</option>
 					</select>
 				</div>
 
@@ -329,7 +335,7 @@
 						{#each logs as log (log.id)}
 							<tr
 								class="hover:bg-gray-50/70 transition cursor-pointer"
-								onclick={() => (selectedLog = log)}
+								onclick={() => goto(`/customer/messages?view=${log.id}`)}
 							>
 								<!-- Recipient Number -->
 								<td class="py-3 px-4 font-mono font-medium text-gray-900 whitespace-nowrap">
@@ -366,12 +372,12 @@
 
 								<!-- Previous Balance -->
 								<td class="py-3 px-4 font-mono font-medium text-right text-gray-900 whitespace-nowrap">
-									BDT {Number(log.previous_balance).toFixed(2)}
+									{moneyOrDash(log.previous_balance) === '—' ? '—' : `BDT ${moneyOrDash(log.previous_balance)}`}
 								</td>
 
 								<!-- Next Balance -->
 								<td class="py-3 px-4 font-mono font-medium text-right text-gray-900 whitespace-nowrap">
-									BDT {Number(log.next_balance ?? 0).toFixed(2)}
+									{moneyOrDash(log.next_balance) === '—' ? '—' : `BDT ${moneyOrDash(log.next_balance)}`}
 								</td>
 
 								<!-- SMS Count -->
@@ -506,73 +512,6 @@
 					class="rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 disabled:opacity-50 transition cursor-pointer"
 				>
 					{exporting ? 'Exporting…' : 'Download Report'}
-				</button>
-			</div>
-		</div>
-	</div>
-{/if}
-
-<!-- View Message Detail Modal -->
-{#if selectedLog}
-	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in backdrop-blur-xs">
-		<div class="relative w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl border border-gray-100">
-			<div class="flex items-center justify-between pb-3 border-b border-gray-200">
-				<h3 class="text-base font-bold text-gray-900">Sent Message Detail</h3>
-				<button
-					type="button"
-					onclick={() => (selectedLog = null)}
-					class="text-gray-400 hover:text-gray-600 cursor-pointer"
-				>
-					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
-					</svg>
-				</button>
-			</div>
-
-			<div class="mt-4 space-y-3 text-xs">
-				<div class="flex justify-between py-1 border-b border-gray-50">
-					<span class="text-gray-500 font-medium">Recipient Number</span>
-					<span class="font-mono font-semibold text-gray-900">{selectedLog.to}</span>
-				</div>
-				<div class="flex justify-between py-1 border-b border-gray-50">
-					<span class="text-gray-500 font-medium">Sender ID</span>
-					<span class="font-mono text-gray-900">{selectedLog.sender_id}</span>
-				</div>
-				<div class="flex justify-between py-1 border-b border-gray-50">
-					<span class="text-gray-500 font-medium">SMS Type</span>
-					<span class="font-semibold text-teal-700">{selectedLog.sms_type}</span>
-				</div>
-				<div class="flex justify-between py-1 border-b border-gray-50">
-					<span class="text-gray-500 font-medium">Cost</span>
-					<span class="font-semibold text-gray-900">BDT {Number(selectedLog.cost).toFixed(2)}</span>
-				</div>
-				<div class="flex justify-between py-1 border-b border-gray-50">
-					<span class="text-gray-500 font-medium">Previous Balance</span>
-					<span class="font-semibold text-gray-900">BDT {Number(selectedLog.previous_balance).toFixed(2)}</span>
-				</div>
-				<div class="flex justify-between py-1 border-b border-gray-50">
-					<span class="text-gray-500 font-medium">Status</span>
-					<span class="capitalize font-semibold text-teal-700">{selectedLog.status}</span>
-				</div>
-				<div class="flex justify-between py-1 border-b border-gray-50">
-					<span class="text-gray-500 font-medium">Date & Time</span>
-					<span class="text-gray-700">{new Date(selectedLog.created_at).toLocaleString()}</span>
-				</div>
-				<div class="py-2">
-					<span class="block text-gray-500 font-medium mb-1">Message Content</span>
-					<div class="rounded-lg bg-gray-50 p-3 text-xs text-gray-800 leading-relaxed border border-gray-200">
-						{selectedLog.body}
-					</div>
-				</div>
-			</div>
-
-			<div class="mt-6 flex justify-end">
-				<button
-					type="button"
-					onclick={() => (selectedLog = null)}
-					class="rounded-lg bg-gray-100 px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-200 transition cursor-pointer"
-				>
-					Close
 				</button>
 			</div>
 		</div>

@@ -20,6 +20,8 @@
 		perPage?: number;
 		currentPage?: number;
 		onPageChange?: (page: number) => void;
+		perPageOptions?: number[];
+		onPerPageChange?: (perPage: number) => void;
 		onSort?: (key: string) => void;
 		sortKey?: string;
 		sortDir?: 'asc' | 'desc';
@@ -27,6 +29,8 @@
 		onSearch?: (value: string) => void;
 		searchPlaceholder?: string;
 		onRowClick?: (row: R) => void;
+		groupBy?: (row: R) => string;
+		collapsedGroups?: boolean;
 	}
 
 	let {
@@ -38,16 +42,41 @@
 		perPage = 15,
 		currentPage = 1,
 		onPageChange,
+		perPageOptions,
+		onPerPageChange,
 		onSort,
 		sortKey = '',
 		sortDir = 'asc',
 		searchValue = $bindable(''),
 		onSearch,
 		searchPlaceholder = 'Search…',
-		onRowClick
+		onRowClick,
+		groupBy,
+		collapsedGroups = false
 	}: Props<T> = $props();
 
 	let totalPages = $derived(Math.max(1, Math.ceil(total / perPage)));
+	let expandedGroups = $state<Record<string, boolean>>({});
+
+	let groupedRows = $derived.by(() => {
+		if (!groupBy) return null;
+		const groups = new Map<string, T[]>();
+		for (const row of rows) {
+			const key = groupBy(row);
+			const bucket = groups.get(key);
+			if (bucket) bucket.push(row);
+			else groups.set(key, [row]);
+		}
+		return Array.from(groups.entries());
+	});
+
+	function isGroupOpen(group: string): boolean {
+		return expandedGroups[group] ?? !collapsedGroups;
+	}
+
+	function toggleGroup(group: string) {
+		expandedGroups = { ...expandedGroups, [group]: !isGroupOpen(group) };
+	}
 
 	function getCellValue(row: T, col: Column<T>): string {
 		if (col.render) return col.render(row);
@@ -127,6 +156,30 @@
 				</tr>
 			</thead>
 			<tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+				{#snippet dataRow(row: T, index: number)}
+					<tr
+						class="transition hover:bg-gray-50/75 dark:hover:bg-gray-800/50 {onRowClick ? 'cursor-pointer' : ''}"
+						onclick={() => onRowClick?.(row)}
+						onkeydown={(e) => { if (onRowClick && e.key === 'Enter') onRowClick(row); }}
+						tabindex={onRowClick ? 0 : undefined}
+					>
+						{#each columns as col (col.key)}
+							<td class="px-4 py-3 text-sm text-gray-900 dark:text-gray-300 {col.class ?? ''}">
+								{#if col.badge}
+									<span
+										class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium {col.badgeClass?.(row) ?? 'badge-processing'}"
+									>
+										{getCellValue(row, col)}
+									</span>
+								{:else if col.money}
+									<span class="font-mono">BDT {getCellValue(row, col)}</span>
+								{:else}
+									{getCellValue(row, col)}
+								{/if}
+							</td>
+						{/each}
+					</tr>
+				{/snippet}
 				{#if loading}
 					{#each { length: 5 } as _, i (i)}
 						<tr>
@@ -143,30 +196,32 @@
 							{emptyMessage}
 						</td>
 					</tr>
+				{:else if groupedRows}
+					{#each groupedRows as [group, groupRows] (group)}
+						<tr class="bg-gray-50/80 dark:bg-gray-800/50">
+							<td colspan={columns.length} class="px-4 py-2">
+								<button
+									type="button"
+									onclick={() => toggleGroup(group)}
+									class="flex w-full items-center gap-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300"
+								>
+									<svg class="h-3.5 w-3.5 transition-transform {isGroupOpen(group) ? 'rotate-90' : ''}" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+										<path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+									</svg>
+									<span class="capitalize">{group.replaceAll('_', ' ')}</span>
+									<span class="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] text-gray-600 dark:bg-gray-700 dark:text-gray-300">{groupRows.length}</span>
+								</button>
+							</td>
+						</tr>
+						{#if isGroupOpen(group)}
+							{#each groupRows as row, i (i)}
+								{@render dataRow(row, i)}
+							{/each}
+						{/if}
+					{/each}
 				{:else}
 					{#each rows as row, i (i)}
-						<tr
-							class="transition hover:bg-gray-50/75 dark:hover:bg-gray-800/50 {onRowClick ? 'cursor-pointer' : ''}"
-							onclick={() => onRowClick?.(row)}
-							onkeydown={(e) => { if (onRowClick && e.key === 'Enter') onRowClick(row); }}
-							tabindex={onRowClick ? 0 : undefined}
-						>
-							{#each columns as col (col.key)}
-								<td class="px-4 py-3 text-sm text-gray-900 dark:text-gray-300 {col.class ?? ''}">
-									{#if col.badge}
-										<span
-											class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium {col.badgeClass?.(row) ?? 'badge-processing'}"
-										>
-											{getCellValue(row, col)}
-										</span>
-									{:else if col.money}
-										<span class="font-mono">৳{getCellValue(row, col)}</span>
-									{:else}
-										{getCellValue(row, col)}
-									{/if}
-								</td>
-							{/each}
-						</tr>
+						{@render dataRow(row, i)}
 					{/each}
 				{/if}
 			</tbody>
@@ -174,12 +229,27 @@
 	</div>
 
 	<!-- Pagination -->
-	{#if totalPages > 1}
+	{#if total > 0}
 		<div class="flex items-center justify-between text-sm">
 			<p class="text-xs text-gray-500">
 				Showing {(currentPage - 1) * perPage + 1}–{Math.min(currentPage * perPage, total)} of {total}
 			</p>
-			<div class="flex items-center gap-1">
+			<div class="flex items-center gap-3">
+				{#if perPageOptions && onPerPageChange}
+					<div class="flex items-center gap-1.5">
+						<span class="text-xs text-gray-500">Per page</span>
+						<select
+							value={perPage}
+							onchange={(e) => onPerPageChange?.(Number(e.currentTarget.value))}
+							class="rounded-lg border border-gray-300 bg-white py-1 px-2 text-xs text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+						>
+							{#each perPageOptions as option (option)}
+								<option value={option}>{option}</option>
+							{/each}
+						</select>
+					</div>
+				{/if}
+				<div class="flex items-center gap-1">
 				<button
 					type="button"
 					onclick={() => onPageChange?.(currentPage - 1)}
@@ -208,6 +278,7 @@
 				>
 					Next
 				</button>
+				</div>
 			</div>
 		</div>
 	{/if}

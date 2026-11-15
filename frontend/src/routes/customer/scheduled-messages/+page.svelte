@@ -138,7 +138,7 @@
 	onMount(() => {
 		load(1);
 		loadSenders();
-		pollTimer = setInterval(() => load(meta.current_page, true), 10000);
+		pollTimer = setInterval(() => load(meta.current_page, true), 5000);
 	});
 
 	onDestroy(() => {
@@ -232,10 +232,52 @@
 		}
 	}
 
+	let pauseItem = $state<ScheduledItem | null>(null);
+	let pauseOpen = $state(false);
+	let resumeItem = $state<ScheduledItem | null>(null);
+	let resumeOpen = $state(false);
+	let bulkDeleteOpen = $state(false);
+
+	function confirmPause(item: ScheduledItem) {
+		pauseItem = item;
+		pauseOpen = true;
+	}
+
+	function confirmResume(item: ScheduledItem) {
+		resumeItem = item;
+		resumeOpen = true;
+	}
+
+	async function executePause() {
+		if (!pauseItem) return;
+		const item = pauseItem;
+		pauseOpen = false;
+		pauseItem = null;
+		await handlePause(item);
+	}
+
+	async function executeResume() {
+		if (!resumeItem) return;
+		const item = resumeItem;
+		resumeOpen = false;
+		resumeItem = null;
+		await handleResume(item);
+	}
+
+	function confirmBulkDelete() {
+		if (selectedIds.length === 0) return;
+		bulkDeleteOpen = true;
+	}
+
+	async function executeBulkDelete() {
+		bulkDeleteOpen = false;
+		await handleBulkDelete();
+	}
+
 	async function handlePause(item: ScheduledItem) {
 		try {
 			await api.post(`/api/v1/customer/scheduled-messages/${item.id}/pause`, {});
-			toast.warning('Scheduled Message Paused', 'The scheduled message has been paused.');
+			toast.warning('Scheduled Message Paused', 'The scheduled message has been paused successfully.');
 			await load(meta.current_page);
 		} catch (e) {
 			const msg = e instanceof ApiError ? (e.data.message as string) : 'Could not pause schedule.';
@@ -368,7 +410,7 @@
 				<button
 					type="button"
 					disabled={bulkDeleting}
-					onclick={handleBulkDelete}
+					onclick={confirmBulkDelete}
 					class="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white shadow-xs hover:bg-rose-500 disabled:opacity-50 cursor-pointer"
 				>
 					{bulkDeleting ? 'Deleting…' : `Delete Selected (${selectedIds.length})`}
@@ -551,7 +593,7 @@
 										{#if item.status === 'scheduled'}
 											<button
 												type="button"
-												onclick={() => handlePause(item)}
+												onclick={() => confirmPause(item)}
 												class="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
 											>
 												Pause
@@ -559,7 +601,7 @@
 										{:else if item.status === 'paused'}
 											<button
 												type="button"
-												onclick={() => handleResume(item)}
+												onclick={() => confirmResume(item)}
 												class="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-300"
 											>
 												Resume
@@ -663,7 +705,7 @@
 <Modal bind:open={deleteOpen} title="Delete Scheduled Message">
 	<div class="space-y-4">
 		<p class="text-sm text-gray-600 dark:text-gray-300">
-			Are you sure you want to permanently delete this scheduled message? This action cannot be undone and the scheduled message will be cancelled.
+			Warning: Are you sure you want to delete this scheduled message? This action is permanent and cannot be undone. The scheduled message will be permanently cancelled.
 		</p>
 		<div class="flex justify-end gap-2 pt-2">
 			<button
@@ -681,6 +723,36 @@
 			>
 				{deleting ? 'Deleting...' : 'Yes, Delete Permanently'}
 			</button>
+		</div>
+	</div>
+</Modal>
+
+<Modal bind:open={pauseOpen} title="Pause Scheduled Message">
+	<div class="space-y-4">
+		<p class="text-sm text-gray-600 dark:text-gray-300">Are you sure you want to pause this scheduled message? It will be held and will not send while paused.</p>
+		<div class="flex justify-end gap-2 pt-2">
+			<button type="button" onclick={() => (pauseOpen = false)} class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">Cancel</button>
+			<button type="button" onclick={executePause} class="rounded-lg bg-amber-500 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-600">Yes, Pause</button>
+		</div>
+	</div>
+</Modal>
+
+<Modal bind:open={resumeOpen} title="Resume Scheduled Message">
+	<div class="space-y-4">
+		<p class="text-sm text-gray-600 dark:text-gray-300">Do you want to re-enable and resume this scheduled message?</p>
+		<div class="flex justify-end gap-2 pt-2">
+			<button type="button" onclick={() => (resumeOpen = false)} class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">Cancel</button>
+			<button type="button" onclick={executeResume} class="rounded-lg bg-sky-600 px-4 py-2 text-xs font-semibold text-white hover:bg-sky-500">Yes, Resume</button>
+		</div>
+	</div>
+</Modal>
+
+<Modal bind:open={bulkDeleteOpen} title="Delete Selected Scheduled Messages">
+	<div class="space-y-4">
+		<p class="text-sm text-gray-600 dark:text-gray-300">Warning: Are you sure you want to delete the selected scheduled messages? This action is permanent and cannot be undone.</p>
+		<div class="flex justify-end gap-2 pt-2">
+			<button type="button" onclick={() => (bulkDeleteOpen = false)} class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">Cancel</button>
+			<button type="button" onclick={executeBulkDelete} class="rounded-lg bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-500">Yes, Delete All</button>
 		</div>
 	</div>
 </Modal>

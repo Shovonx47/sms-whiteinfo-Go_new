@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { auth } from '$lib/stores/auth.svelte.js';
+	import { api } from '$lib/api.js';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
@@ -88,6 +89,22 @@
 	}
 
 	let isImpersonating = $state(false);
+	let scheduledCount = $state(0);
+
+	async function loadScheduledCount() {
+		try {
+			const res = await api.get<{ meta?: { total?: number } }>('/api/v1/customer/scheduled-messages?per_page=1');
+			scheduledCount = res.meta?.total ?? 0;
+		} catch {
+			scheduledCount = 0;
+		}
+	}
+
+	onMount(() => {
+		loadScheduledCount();
+		const timer = setInterval(loadScheduledCount, 30000);
+		return () => clearInterval(timer);
+	});
 
 	onMount(() => {
 		try {
@@ -271,6 +288,8 @@
 								{@const active = isActive(item.href)}
 								<a
 									href={item.href}
+									target={item.href === '/docs' ? '_blank' : undefined}
+									rel={item.href === '/docs' ? 'noopener' : undefined}
 									class="group flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium transition {active
 										? 'bg-gray-100 text-teal-700 font-semibold dark:bg-gray-800 dark:text-teal-400'
 										: 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800/50 dark:hover:text-gray-200'}"
@@ -281,6 +300,9 @@
 											: 'bg-gray-300 group-hover:bg-gray-500 dark:bg-gray-600 dark:group-hover:bg-gray-400'}"
 									></span>
 									<span class="truncate">{item.label}</span>
+									{#if item.href.includes('scheduled-messages') && scheduledCount > 0}
+										<span class="ml-auto rounded-full bg-teal-100 px-1.5 py-0.5 text-[10px] font-bold text-teal-700 dark:bg-teal-900/60 dark:text-teal-300">{scheduledCount > 99 ? '99+' : scheduledCount}</span>
+									{/if}
 								</a>
 							{/each}
 						</div>

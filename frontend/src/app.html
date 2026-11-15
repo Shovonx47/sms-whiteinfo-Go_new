@@ -7,6 +7,16 @@
 		<link rel="apple-touch-icon" href="%sveltekit.assets%/icon.png" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="theme-color" content="#ffffff" />
+		<script>
+			try {
+				const stored = localStorage.getItem('sms_theme');
+				if (stored === 'dark' || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+					document.documentElement.classList.add('dark');
+				}
+			} catch {
+				// localStorage can be unavailable in privacy-restricted contexts.
+			}
+		</script>
 		<link rel="preconnect" href="https://fonts.googleapis.com" />
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
 		<link

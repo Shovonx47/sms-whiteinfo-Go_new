@@ -102,7 +102,7 @@ func (server *Server) initiateDeposit(c fiber.Ctx) error {
 		if spBalance < req.Amount {
 			return c.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
 				"success": false,
-				"message": "Payment gateway temporarily unavailable. Please contact your service provider.",
+				"message": "Your reseller does not have sufficient balance for this top-up. Please contact your reseller.",
 			})
 		}
 	}
@@ -292,9 +292,6 @@ func (server *Server) pricingReport(c fiber.Ctx) error {
 	rates := make([]fiber.Map, 0, len(effective))
 	for _, entry := range effective {
 		country := countryNames[entry.Operator.CountryID]
-		if country == "" {
-			country = "Bangladesh"
-		}
 		var maskingRate any
 		if entry.MaskingRate != nil {
 			maskingRate = *entry.MaskingRate
@@ -332,28 +329,27 @@ func (server *Server) pricingReport(c fiber.Ctx) error {
 
 func resolveAnalyticsDateRange(rangeParam, fromParam, toParam string) (time.Time, time.Time) {
 	now := time.Now()
-	endOfToday := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, now.Location())
 	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 
 	switch strings.ToLower(strings.TrimSpace(rangeParam)) {
 	case "today":
-		return startOfToday, endOfToday
+		return startOfToday, now
 	case "yesterday":
 		y := startOfToday.AddDate(0, 0, -1)
 		return y, time.Date(y.Year(), y.Month(), y.Day(), 23, 59, 59, 0, now.Location())
 	case "this_week":
 		offset := (int(now.Weekday()) + 6) % 7 // Monday is the first day of the week.
-		return startOfToday.AddDate(0, 0, -offset), endOfToday
+		return startOfToday.AddDate(0, 0, -offset), now
 	case "this_month":
 		first := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-		return first, endOfToday
+		return first, now
 	case "last_month":
 		firstThis := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		firstLast := firstThis.AddDate(0, -1, 0)
 		endLast := firstThis.Add(-time.Second)
 		return firstLast, endLast
 	case "this_year":
-		return time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location()), endOfToday
+		return time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location()), now
 	case "custom":
 		from, fromErr := time.ParseInLocation("2006-01-02", strings.TrimSpace(fromParam), now.Location())
 		to, toErr := time.ParseInLocation("2006-01-02", strings.TrimSpace(toParam), now.Location())
@@ -363,13 +359,15 @@ func resolveAnalyticsDateRange(rangeParam, fromParam, toParam string) (time.Time
 			}
 			return from, time.Date(to.Year(), to.Month(), to.Day(), 23, 59, 59, 0, now.Location())
 		}
-		return startOfToday.AddDate(0, 0, -29), endOfToday
+		return now.AddDate(0, 0, -30), now
 	case "30d", "last_30_days":
-		return startOfToday.AddDate(0, 0, -29), endOfToday
+		return now.AddDate(0, 0, -30), now
 	case "90d", "last_90_days":
-		return startOfToday.AddDate(0, 0, -89), endOfToday
-	default: // "7d" / "last_7_days"
-		return startOfToday.AddDate(0, 0, -6), endOfToday
+		return now.AddDate(0, 0, -90), now
+	case "7d", "last_7_days":
+		return now.AddDate(0, 0, -7), now
+	default: // Reference default: last_30_days
+		return now.AddDate(0, 0, -30), now
 	}
 }
 
@@ -397,17 +395,9 @@ type messagingDailyPoint struct {
 	Cost         float64 `json:"cost"`
 }
 
-type messagingOperatorBreakdown struct {
-	Name    string  `json:"name"`
-	Count   int     `json:"count"`
-	Percent float64 `json:"percent"`
-}
-
 type messagingAnalyticsPayload struct {
-	Stats     messagingAnalyticsStats      `json:"stats"`
-	Campaigns map[string]int               `json:"campaigns"`
-	Daily     []messagingDailyPoint        `json:"daily"`
-	Operators []messagingOperatorBreakdown `json:"operators"`
+	Stats messagingAnalyticsStats `json:"stats"`
+	Daily []messagingDailyPoint   `json:"daily"`
 }
 
 func (server *Server) buildMessagingAnalyticsData(ctx context.Context, userID int64, from, to time.Time) (*messagingAnalyticsPayload, error) {
@@ -481,44 +471,6 @@ func (server *Server) buildMessagingAnalyticsData(ctx context.Context, userID in
 		})
 	}
 
-	// Compute real operator breakdown using OperatorRateResolver prefix mapping.
-	opCounts := make(map[string]int)
-	if resolver, rErr := billing.ForUser(ctx, server.db, userID); rErr == nil {
-		opRows, oErr := server.db.QueryContext(ctx, "SELECT COALESCE(`to`, '') FROM messages WHERE user_id = ? AND created_at >= ? AND created_at <= ?", userID, from, to)
-		if oErr == nil {
-			defer opRows.Close()
-			for opRows.Next() {
-				var recipient string
-				if scanErr := opRows.Scan(&recipient); scanErr == nil {
-					name := resolver.OperatorNameFor(recipient)
-					if name == "" {
-						name = "Other"
-					}
-					opCounts[name]++
-				}
-			}
-		}
-	}
-
-	operators := make([]messagingOperatorBreakdown, 0, len(opCounts))
-	for name, count := range opCounts {
-		pct := 0.0
-		if total > 0 {
-			pct = math.Round((float64(count)/float64(total))*1000) / 10
-		}
-		operators = append(operators, messagingOperatorBreakdown{
-			Name:    name,
-			Count:   count,
-			Percent: pct,
-		})
-	}
-	sort.Slice(operators, func(i, j int) bool {
-		if operators[i].Count == operators[j].Count {
-			return operators[i].Name < operators[j].Name
-		}
-		return operators[i].Count > operators[j].Count
-	})
-
 	return &messagingAnalyticsPayload{
 		Stats: messagingAnalyticsStats{
 			Total:       total,
@@ -531,15 +483,13 @@ func (server *Server) buildMessagingAnalyticsData(ctx context.Context, userID in
 			AvgParts:    math.Round(avgParts*10) / 10,
 			Unicode:     unicode,
 		},
-		Campaigns: map[string]int{"total": 0, "sent": 0},
-		Daily:     daily,
-		Operators: operators,
+		Daily: daily,
 	}, nil
 }
 
 func (server *Server) messagingAnalytics(c fiber.Ctx) error {
 	claims := customer(c)
-	from, to := resolveAnalyticsDateRange(c.Query("range", "7d"), c.Query("from"), c.Query("to"))
+	from, to := resolveAnalyticsDateRange(c.Query("range", "last_30_days"), c.Query("from"), c.Query("to"))
 
 	payload, err := server.buildMessagingAnalyticsData(c.Context(), claims.UserID, from, to)
 	if err != nil {
@@ -551,7 +501,7 @@ func (server *Server) messagingAnalytics(c fiber.Ctx) error {
 
 func (server *Server) exportMessagingAnalytics(c fiber.Ctx) error {
 	claims := customer(c)
-	from, to := resolveAnalyticsDateRange(c.Query("range", "7d"), c.Query("from"), c.Query("to"))
+	from, to := resolveAnalyticsDateRange(c.Query("range", "last_30_days"), c.Query("from"), c.Query("to"))
 	format := strings.ToLower(strings.TrimSpace(c.Query("format", "csv")))
 
 	payload, err := server.buildMessagingAnalyticsData(c.Context(), claims.UserID, from, to)

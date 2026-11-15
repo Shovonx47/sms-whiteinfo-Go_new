@@ -154,11 +154,11 @@ func (server *Server) handlePaymentWebhook(context fiber.Ctx) error {
 	// ─── Step 4: Verify with provider ─────────────────────────────────────────────
 	apiKey := os.Getenv("PIPRAPAY_API_KEY")
 	baseURL := os.Getenv("PIPRAPAY_BASE_URL")
-	if apiKey == "" {
-		apiKey = "dummy-piprapay-key"
-	}
-	if baseURL == "" {
-		baseURL = "http://127.0.0.1:9999"
+	if apiKey == "" || baseURL == "" {
+		reason := "Payment gateway is not configured (PIPRAPAY_API_KEY / PIPRAPAY_BASE_URL missing)"
+		log.Printf("[PAYMENT WEBHOOK REJECT] %s", reason)
+		server.recordWebhookAttempt(context, gateway, eventID, statusStr, string(payloadJSON), string(headersJSON), existingID, false)
+		return context.Status(http.StatusServiceUnavailable).JSON(fiber.Map{"message": "Payment gateway is not configured."})
 	}
 
 	driver, err := payment.NewPipraPayDriver(apiKey, baseURL)

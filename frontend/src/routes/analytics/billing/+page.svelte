@@ -24,7 +24,7 @@
 
 	let data = $state<BillingData | null>(null);
 	let loading = $state(true);
-	let range = $state('30d');
+	let range = $state('last_30_days');
 	let customFrom = $state('');
 	let customTo = $state('');
 	let topUpOpen = $state(false);
@@ -61,12 +61,18 @@
 		{ value: 'today', label: 'Today' },
 		{ value: 'yesterday', label: 'Yesterday' },
 		{ value: 'this_week', label: 'This Week' },
-		{ value: '7d', label: 'Last 7 Days' },
-		{ value: '30d', label: 'Last 30 Days' },
+		{ value: 'last_7_days', label: 'Last 7 Days' },
 		{ value: 'this_month', label: 'This Month' },
+		{ value: 'last_30_days', label: 'Last 30 Days' },
 		{ value: 'this_year', label: 'This Year' },
 		{ value: 'custom', label: 'Custom Range' }
 	];
+
+	function methodLabel(method: string) {
+		if (method === 'manual') return 'Manual';
+		if (method === 'piprapay') return 'PipraPay';
+		return method;
+	}
 
 	async function load() {
 		loading = true;
@@ -156,7 +162,7 @@
 			const iy2 = cy + inner * Math.sin(angle);
 			const large = sweep > Math.PI ? 1 : 0;
 			const d = `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} L ${ix2} ${iy2} A ${inner} ${inner} 0 ${large} 0 ${ix1} ${iy1} Z`;
-			return { d, color: DOUGHNUT_COLORS[i % DOUGHNUT_COLORS.length], label: m.method, amount: m.amount };
+			return { d, color: DOUGHNUT_COLORS[i % DOUGHNUT_COLORS.length], label: methodLabel(m.method), amount: m.amount };
 		});
 	}
 

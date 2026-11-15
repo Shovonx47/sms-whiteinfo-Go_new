@@ -1,440 +1,454 @@
 <script lang="ts">
 	import { api } from '$lib/api.js';
+	import Modal from '$lib/components/Modal.svelte';
 	import { toast } from '$lib/stores/toast.svelte.js';
 	import { onMount } from 'svelte';
 
 	interface ApiToken {
 		id: number;
 		name: string;
-		token?: string;
 		last_used_at: string | null;
 		expires_at: string | null;
 		created_at: string;
 	}
 
+	interface Meta {
+		total: number;
+		per_page: number;
+		current_page: number;
+	}
+
 	let tokens = $state<ApiToken[]>([]);
+	let meta = $state<Meta>({ total: 0, per_page: 10, current_page: 1 });
 	let loading = $state(true);
 	let searchQuery = $state('');
+	let selectedIds = $state<number[]>([]);
 
-	// Create Modal
 	let createModalOpen = $state(false);
 	let tokenName = $state('');
-	let expiresDays = $state('30');
+	let expiresAt = $state('30');
+	let createError = $state('');
 	let submitting = $state(false);
 
-	// Display newly created token
+	let tokenModalOpen = $state(false);
 	let newlyCreatedToken = $state<string | null>(null);
 
-	// Revoke confirm
-	let revokeTarget = $state<ApiToken | null>(null);
-	let revokeName = $state('');
-	let revokeMenuOpen = $state<number | null>(null);
+	let editOpen = $state(false);
+	let editTarget = $state<ApiToken | null>(null);
+	let editName = $state('');
+	let editError = $state('');
+	let savingEdit = $state(false);
 
-	async function load() {
+	let deleteOpen = $state(false);
+	let deleteTarget = $state<ApiToken | null>(null);
+	let deleteName = $state('');
+	let deleteError = $state('');
+	let deleting = $state(false);
+
+	let bulkDeleteOpen = $state(false);
+	let bulkDeleting = $state(false);
+
+	async function load(p = meta.current_page) {
 		loading = true;
+		selectedIds = [];
 		try {
-			const data = await api.get<{ data: ApiToken[] }>('/api/v1/customer/tokens');
-			tokens = data.data;
+			const params = new URLSearchParams({
+				page: String(p),
+				per_page: String(meta.per_page)
+			});
+			if (searchQuery.trim()) params.set('search', searchQuery.trim());
+			const data = await api.get<{ data: ApiToken[]; meta: Meta }>(
+				`/api/v1/customer/tokens?${params}`
+			);
+			tokens = data.data ?? [];
+			meta = data.meta ?? { total: 0, per_page: meta.per_page, current_page: p };
 		} catch {
 			tokens = [];
+			meta = { total: 0, per_page: meta.per_page, current_page: p };
 		} finally {
 			loading = false;
 		}
 	}
 
-	onMount(() => load());
+	let searchTimer: ReturnType<typeof setTimeout> | null = null;
+	function handleSearchInput() {
+		if (searchTimer) clearTimeout(searchTimer);
+		searchTimer = setTimeout(() => load(1), 300);
+	}
+
+	onMount(() => load(1));
+
+	function openCreate() {
+		tokenName = '';
+		expiresAt = '30';
+		createError = '';
+		createModalOpen = true;
+	}
 
 	async function handleCreateToken() {
-		if (!tokenName.trim()) {
-			toast.error('Validation error', 'Token name is required.');
+		createError = '';
+		const name = tokenName.trim();
+		if (!name) {
+			createError = 'The token name field is required.';
+			return;
+		}
+		if (name.length > 255) {
+			createError = 'The token name must not be greater than 255 characters.';
 			return;
 		}
 
 		submitting = true;
 		try {
 			const res = await api.post<{ token: string; data: ApiToken }>('/api/v1/customer/tokens', {
-				name: tokenName,
-				expires_days: Number(expiresDays)
+				name,
+				expires_at: expiresAt === 'never' ? 'never' : Number(expiresAt)
 			});
-			newlyCreatedToken = res.token;
-			tokens = [res.data, ...tokens];
-			toast.success('Token Generated', 'Make sure to copy your new token now.');
-			tokenName = '';
-		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : 'Failed to generate token';
-			toast.error('Token Generation Failed', message);
+			newlyCreatedToken = res.token.includes('|') ? res.token.split('|').slice(1).join('|') : res.token;
+			createModalOpen = false;
+			tokenModalOpen = true;
+			await load(1);
+		} catch (err) {
+			createError = err instanceof Error ? err.message : 'Failed to create token.';
 		} finally {
 			submitting = false;
-		}
-	}
-
-	async function handleRevoke(token: ApiToken) {
-		if (revokeName !== token.name) {
-			toast.error('Name does not match', 'Type the exact token name to confirm deletion.');
-			return;
-		}
-		revokeMenuOpen = null;
-		revokeTarget = null;
-		revokeName = '';
-		try {
-			await api.delete(`/api/v1/customer/tokens/${token.id}`);
-			tokens = tokens.filter((t) => t.id !== token.id);
-			toast.success('Token Revoked', 'The API token has been deleted.');
-		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : 'Failed to revoke token';
-			toast.error('Revoke Failed', message);
 		}
 	}
 
 	async function copyToClipboard(text: string) {
 		try {
 			await navigator.clipboard.writeText(text);
-			toast.success('Copied!', 'Token copied to clipboard.');
+			toast.success('Copied', 'Token copied to clipboard.');
 		} catch {
 			toast.info('Copy', text);
 		}
 	}
 
-	let filteredTokens = $derived(
-		searchQuery.trim()
-			? tokens.filter((t) => t.name.toLowerCase().includes(searchQuery.toLowerCase()))
-			: tokens
-	);
-
-	function formatDate(val: string | null) {
-		if (!val) return '—';
-		return new Date(val).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+	function openEdit(token: ApiToken) {
+		editTarget = token;
+		editName = token.name;
+		editError = '';
+		editOpen = true;
 	}
 
-	async function renameToken(token: ApiToken) {
-		const nextName = prompt('Rename token', token.name)?.trim();
-		if (!nextName || nextName === token.name) return;
+	async function handleRename() {
+		if (!editTarget) return;
+		editError = '';
+		const name = editName.trim();
+		if (!name) {
+			editError = 'The token name field is required.';
+			return;
+		}
+		if (name.length > 255) {
+			editError = 'The token name must not be greater than 255 characters.';
+			return;
+		}
+		savingEdit = true;
 		try {
-			await api.put(`/api/v1/customer/tokens/${token.id}`, { name: nextName });
-			tokens = tokens.map((item) => item.id === token.id ? { ...item, name: nextName } : item);
-			toast.success('Token Renamed', 'The API token name has been updated.');
+			await api.put(`/api/v1/customer/tokens/${editTarget.id}`, { name });
+			editOpen = false;
+			editTarget = null;
+			toast.success('Saved', 'The access token has been updated.');
+			await load(meta.current_page);
 		} catch (err) {
-			toast.error('Rename Failed', err instanceof Error ? err.message : 'Failed to rename token.');
+			editError = err instanceof Error ? err.message : 'Failed to update token.';
+		} finally {
+			savingEdit = false;
 		}
 	}
 
-	function timeAgo(val: string | null) {
-		if (!val) return 'Never';
-		const diff = Date.now() - new Date(val).getTime();
-		const mins = Math.floor(diff / 60000);
-		if (mins < 1) return 'Just now';
-		if (mins < 60) return `${mins}m ago`;
-		const hrs = Math.floor(mins / 60);
-		if (hrs < 24) return `${hrs}h ago`;
-		const days = Math.floor(hrs / 24);
-		return `${days}d ago`;
+	function openDelete(token: ApiToken) {
+		deleteTarget = token;
+		deleteName = '';
+		deleteError = '';
+		deleteOpen = true;
 	}
+
+	async function handleDelete() {
+		if (!deleteTarget) return;
+		deleteError = '';
+		if (deleteName !== deleteTarget.name) {
+			deleteError = 'Token name does not match.';
+			return;
+		}
+		deleting = true;
+		try {
+			await api.delete(`/api/v1/customer/tokens/${deleteTarget.id}`);
+			deleteOpen = false;
+			deleteTarget = null;
+			toast.success('Deleted', 'The access token has been deleted.');
+			await load(meta.current_page);
+		} catch (err) {
+			deleteError = err instanceof Error ? err.message : 'Failed to delete token.';
+		} finally {
+			deleting = false;
+		}
+	}
+
+	function toggleAll() {
+		selectedIds = selectedIds.length === tokens.length ? [] : tokens.map((t) => t.id);
+	}
+
+	function toggleOne(id: number) {
+		selectedIds = selectedIds.includes(id)
+			? selectedIds.filter((item) => item !== id)
+			: [...selectedIds, id];
+	}
+
+	async function handleBulkDelete() {
+		if (selectedIds.length === 0) return;
+		bulkDeleting = true;
+		try {
+			const res = await api.post<{ deleted: number }>('/api/v1/customer/tokens/bulk-delete', {
+				ids: selectedIds
+			});
+			toast.success('Deleted', `${res.deleted} API token(s) revoked.`);
+			bulkDeleteOpen = false;
+			await load(1);
+		} catch (err) {
+			toast.error('Delete failed', err instanceof Error ? err.message : 'Failed to delete tokens.');
+		} finally {
+			bulkDeleting = false;
+		}
+	}
+
+	function formatDateTime(value: string | null) {
+		if (!value) return '—';
+		const date = new Date(value);
+		if (Number.isNaN(date.getTime())) return '—';
+		return date.toLocaleString('en-US', {
+			month: 'short',
+			day: '2-digit',
+			year: 'numeric',
+			hour: 'numeric',
+			minute: '2-digit',
+			hour12: true
+		});
+	}
+
+	let totalPages = $derived(Math.max(1, Math.ceil((meta.total || 0) / (meta.per_page || 10))));
 </script>
 
 <svelte:head>
-	<title>API Tokens (API Keys) - White INFO</title>
+	<title>Access Tokens - White INFO</title>
 </svelte:head>
 
-<!-- Breadcrumb -->
-<div class="mb-2 flex items-center gap-1 text-xs text-gray-500">
-	<span class="font-medium text-gray-700">API Tokens (API Keys)</span>
-	<span class="text-gray-400">›</span>
-	<span>List</span>
-</div>
-
-<!-- Page Header -->
-<div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-	<h1 class="text-2xl font-bold text-gray-900">API Tokens (API Keys)</h1>
-	<button
-		type="button"
-		onclick={() => { newlyCreatedToken = null; createModalOpen = true; }}
-		class="inline-flex items-center gap-2 rounded-lg border border-teal-600 bg-white px-4 py-2 text-sm font-semibold text-teal-700 shadow-sm transition hover:bg-teal-50"
-	>
-		New API Token (API Key)
-	</button>
-</div>
-
-<!-- Table Card -->
-<div class="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-	<!-- Search + Column Toggle bar -->
-	<div class="flex items-center justify-end gap-2 px-4 py-3 border-b border-gray-100">
-		<div class="relative">
-			<svg class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 15.803 7.5 7.5 0 0016.803 15.803z" />
+<div class="space-y-6">
+	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+		<h1 class="text-2xl font-bold tracking-tight text-gray-950 dark:text-white">Access Tokens</h1>
+		<button
+			type="button"
+			onclick={openCreate}
+			class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-500"
+		>
+			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+				<path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
 			</svg>
-			<input
-				type="search"
-				bind:value={searchQuery}
-				placeholder="Search"
-				class="w-52 rounded-lg border border-gray-200 bg-gray-50 py-1.5 pl-9 pr-3 text-sm text-gray-700 placeholder-gray-400 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
-			/>
-		</div>
-		<!-- Column toggle icon -->
-		<button type="button" aria-label="Toggle columns" class="rounded-lg border border-gray-200 bg-gray-50 p-1.5 text-gray-500 hover:text-gray-700 transition">
-			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M9 4.5v15m6-15v15M3.75 9h16.5M3.75 15h16.5" />
-			</svg>
+			New access token
 		</button>
 	</div>
 
-	<!-- Table -->
-	<table class="w-full text-sm text-left">
-		<thead class="bg-white border-b border-gray-100">
-			<tr>
-				<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">
-					<span class="flex items-center gap-1">
-						TOKEN NAME
-						<svg class="h-3 w-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-							<path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-						</svg>
-					</span>
-				</th>
-				<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">
-					<span class="flex items-center gap-1">
-						LAST USED
-						<svg class="h-3 w-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-							<path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-						</svg>
-					</span>
-				</th>
-				<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">
-					<span class="flex items-center gap-1">
-						EXPIRES AT
-						<svg class="h-3 w-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-							<path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-						</svg>
-					</span>
-				</th>
-				<th class="px-6 py-3"></th>
-			</tr>
-		</thead>
-		<tbody>
-			{#if loading}
-				<tr>
-					<td colspan="4" class="px-6 py-16 text-center">
-						<div class="flex flex-col items-center gap-3">
-							<svg class="h-6 w-6 animate-spin text-teal-600" fill="none" viewBox="0 0 24 24">
-								<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-								<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-							</svg>
-						</div>
-					</td>
-				</tr>
-			{:else if filteredTokens.length === 0}
-				<tr>
-					<td colspan="4" class="px-6 py-20 text-center">
-						<div class="flex flex-col items-center gap-3">
-							<div class="flex h-14 w-14 items-center justify-center rounded-full border-2 border-gray-200 bg-gray-50">
-								<svg class="h-6 w-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-									<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-								</svg>
-							</div>
-							<p class="text-sm text-gray-500">No API Tokens (API Keys)</p>
-						</div>
-					</td>
-				</tr>
-			{:else}
-				{#each filteredTokens as token (token.id)}
-					<tr class="border-t border-gray-100 hover:bg-gray-50 transition">
-						<td class="px-6 py-3 font-medium text-gray-900">{token.name}</td>
-						<td class="px-6 py-3 text-gray-600">{timeAgo(token.last_used_at)}</td>
-						<td class="px-6 py-3 text-gray-600">{formatDate(token.expires_at)}</td>
-						<td class="px-6 py-3 text-right">
-							<div class="relative inline-block">
-								<button
-									type="button"
-									aria-label="Actions"
-									onclick={() => revokeMenuOpen = revokeMenuOpen === token.id ? null : token.id}
-									class="rounded-lg border border-gray-200 bg-white p-1.5 text-gray-500 hover:text-gray-700 transition"
-								>
-									<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-										<circle cx="10" cy="4" r="1.5" />
-										<circle cx="10" cy="10" r="1.5" />
-										<circle cx="10" cy="16" r="1.5" />
-									</svg>
-								</button>
-								{#if revokeMenuOpen === token.id}
-									<div class="absolute right-0 z-50 mt-1 w-36 rounded-lg border border-gray-200 bg-white shadow-lg">
-										<button
-											type="button"
-											onclick={() => { revokeMenuOpen = null; renameToken(token); }}
-											class="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 rounded-lg transition"
-										>
-											Edit
-										</button>
-										<button
-											type="button"
-											onclick={() => { revokeTarget = token; revokeName = ''; revokeMenuOpen = null; }}
-											class="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 rounded-lg transition"
-										>
-											<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-												<path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-											</svg>
-											Revoke
-										</button>
-									</div>
-								{/if}
-							</div>
-						</td>
-					</tr>
-				{/each}
-			{/if}
-		</tbody>
-	</table>
-
-	<!-- Pagination footer (simple) -->
-	{#if !loading && filteredTokens.length > 0}
-		<div class="flex items-center justify-between border-t border-gray-100 px-6 py-3 text-xs text-gray-500">
-			<span>Showing 1 to {filteredTokens.length} of {filteredTokens.length} results</span>
-			<div class="flex items-center gap-2">
-				<span>Per page</span>
-				<select class="rounded border border-gray-200 px-2 py-1 text-xs focus:outline-none">
-					<option>10</option>
-					<option>25</option>
-					<option>50</option>
-				</select>
+	<div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
+		<div class="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-gray-800">
+			<div class="flex items-center gap-3">
+				{#if selectedIds.length > 0}
+					<button
+						type="button"
+						onclick={() => (bulkDeleteOpen = true)}
+						class="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500"
+					>
+						Delete selected ({selectedIds.length})
+					</button>
+				{/if}
+			</div>
+			<div class="relative">
+				<input
+					type="text"
+					bind:value={searchQuery}
+					oninput={handleSearchInput}
+					placeholder="Search"
+					class="w-52 rounded-lg border border-gray-300 bg-white py-1.5 pr-3 pl-8 text-sm text-gray-700 placeholder-gray-400 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
+				/>
+				<svg class="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+					<path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+				</svg>
 			</div>
 		</div>
-	{/if}
-</div>
 
-<!-- Generate Token Modal -->
-{#if createModalOpen}
-	<div
-		class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-		onclick={(e) => { if (e.target === e.currentTarget) createModalOpen = false; }}
-		onkeydown={(e) => { if (e.key === 'Escape') createModalOpen = false; }}
-		role="dialog"
-		tabindex="-1"
-		aria-modal="true"
-	>
-		<div class="w-full max-w-md rounded-xl bg-white shadow-xl mx-4">
-			<div class="border-b border-gray-100 px-6 py-4 flex items-center justify-between">
-				<div>
-					<h2 class="text-base font-semibold text-gray-900">Generate API Token</h2>
-					<p class="text-xs text-gray-500 mt-0.5">Create a personal Bearer access key for your application.</p>
-				</div>
-				<button type="button" aria-label="Close" onclick={() => createModalOpen = false} class="rounded-lg p-1.5 text-gray-400 hover:text-gray-600">
-					<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-					</svg>
-				</button>
+		<div class="overflow-x-auto">
+			<table class="w-full text-left text-sm">
+				<thead class="border-b border-gray-200 bg-gray-50/70 text-xs font-semibold tracking-wide text-gray-600 uppercase dark:border-gray-700 dark:bg-gray-800/70 dark:text-gray-300">
+					<tr>
+						<th class="w-10 px-4 py-3">
+							<input type="checkbox" checked={tokens.length > 0 && selectedIds.length === tokens.length} onchange={toggleAll} aria-label="Select all tokens" />
+						</th>
+						<th class="px-4 py-3">Token Name</th>
+						<th class="px-4 py-3">Last Used</th>
+						<th class="px-4 py-3">Expires At</th>
+						<th class="px-4 py-3 text-right"></th>
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+					{#if loading}
+						<tr>
+							<td colspan="5" class="px-4 py-16 text-center text-sm text-gray-500">
+								<div class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-teal-600"></div>
+							</td>
+						</tr>
+					{:else if tokens.length === 0}
+						<tr>
+							<td colspan="5" class="px-4 py-16 text-center text-sm text-gray-500">No access tokens found.</td>
+						</tr>
+					{:else}
+						{#each tokens as token (token.id)}
+							<tr class="transition hover:bg-gray-50/70 dark:hover:bg-gray-800/40">
+								<td class="px-4 py-3">
+									<input type="checkbox" checked={selectedIds.includes(token.id)} onchange={() => toggleOne(token.id)} aria-label={`Select ${token.name}`} />
+								</td>
+								<td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{token.name}</td>
+								<td class="px-4 py-3 text-gray-600 dark:text-gray-400">{token.last_used_at ? formatDateTime(token.last_used_at) : 'Never Used'}</td>
+								<td class="px-4 py-3 text-gray-600 dark:text-gray-400">{token.expires_at ? formatDateTime(token.expires_at) : 'Never Expires'}</td>
+								<td class="px-4 py-3 text-right whitespace-nowrap">
+									<div class="flex items-center justify-end gap-1">
+										<button type="button" onclick={() => openEdit(token)} class="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-teal-700 dark:hover:bg-gray-700" title="Edit">
+											<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+												<path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Z" />
+											</svg>
+										</button>
+										<button type="button" onclick={() => openDelete(token)} class="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-rose-600 dark:hover:bg-gray-700" title="Delete">
+											<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+												<path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+											</svg>
+										</button>
+									</div>
+								</td>
+							</tr>
+						{/each}
+					{/if}
+				</tbody>
+			</table>
+		</div>
+
+		<div class="flex flex-col gap-3 border-t border-gray-200 px-4 py-3 text-xs text-gray-500 sm:flex-row sm:items-center sm:justify-between dark:border-gray-700">
+			<div class="flex items-center gap-2">
+				<span>Per page</span>
+				<select
+					value={meta.per_page}
+					onchange={(e) => { meta.per_page = Number((e.target as HTMLSelectElement).value); load(1); }}
+					class="rounded border border-gray-300 px-2 py-1 text-xs dark:border-gray-700 dark:bg-gray-800"
+				>
+					<option value="10">10</option>
+					<option value="25">25</option>
+					<option value="50">50</option>
+				</select>
 			</div>
-			<div class="px-6 py-5">
-				{#if newlyCreatedToken}
-					<div class="space-y-4">
-						<div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-							<p class="text-xs font-semibold text-emerald-700">Token Generated Successfully!</p>
-							<p class="mt-1 text-xs text-gray-600">Copy this token now. For security purposes, you will not be able to view it again.</p>
-							<div class="mt-3 flex items-center gap-2">
-								<input
-									type="text"
-									readonly
-									value={newlyCreatedToken}
-									class="flex-1 font-mono text-xs rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-emerald-700 focus:outline-none"
-								/>
-								<button
-									type="button"
-									onclick={() => copyToClipboard(newlyCreatedToken!)}
-									class="rounded-lg bg-teal-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-teal-500"
-								>
-									Copy
-								</button>
-							</div>
-						</div>
-						<div class="flex justify-end pt-1">
-							<button
-								type="button"
-								onclick={() => { createModalOpen = false; newlyCreatedToken = null; }}
-								class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
-							>
-								Done
-							</button>
-						</div>
+			<div class="flex items-center gap-3">
+				<span>
+					{#if meta.total === 0}
+						No results
+					{:else}
+						Showing {(meta.current_page - 1) * meta.per_page + 1} to {Math.min(meta.current_page * meta.per_page, meta.total)} of {meta.total} results
+					{/if}
+				</span>
+				{#if totalPages > 1}
+					<div class="flex items-center gap-1">
+						<button type="button" disabled={meta.current_page <= 1} onclick={() => load(meta.current_page - 1)} class="rounded border border-gray-300 px-2 py-1 disabled:opacity-40 dark:border-gray-700">&lsaquo;</button>
+						<span class="px-1">Page {meta.current_page} / {totalPages}</span>
+						<button type="button" disabled={meta.current_page >= totalPages} onclick={() => load(meta.current_page + 1)} class="rounded border border-gray-300 px-2 py-1 disabled:opacity-40 dark:border-gray-700">&rsaquo;</button>
 					</div>
-				{:else}
-					<form onsubmit={(e) => { e.preventDefault(); handleCreateToken(); }} class="space-y-4">
-						<div>
-							<label for="token-name" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-gray-700">Token Name / Service</label>
-							<input
-								id="token-name"
-								type="text"
-								bind:value={tokenName}
-								placeholder="e.g. ERP Backend Gateway, Mobile App"
-								class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
-							/>
-						</div>
-						<div>
-							<label for="token-expiry" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-gray-700">Expiration Date</label>
-							<select id="token-expiry" bind:value={expiresDays} class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500">
-								<option value="1">1 Day</option>
-								<option value="7">7 Days</option>
-								<option value="30">1 Month</option>
-								<option value="90">3 Months</option>
-								<option value="180">6 Months</option>
-								<option value="365">1 Year</option>
-								<option value="0">Never</option>
-							</select>
-						</div>
-						<div class="flex justify-end gap-3 pt-1">
-							<button
-								type="button"
-								onclick={() => createModalOpen = false}
-								class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
-							>
-								Cancel
-							</button>
-							<button
-								type="submit"
-								disabled={submitting}
-								class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-teal-500 transition disabled:opacity-50"
-							>
-								{submitting ? 'Generating...' : 'Create Token'}
-							</button>
-						</div>
-					</form>
 				{/if}
 			</div>
 		</div>
 	</div>
-{/if}
+</div>
 
-<!-- Revoke Confirm Modal -->
-{#if revokeTarget}
-	<div
-		class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-		onclick={(e) => { if (e.target === e.currentTarget) revokeTarget = null; }}
-		onkeydown={(e) => { if (e.key === 'Escape') revokeTarget = null; }}
-		role="dialog"
-		tabindex="-1"
-		aria-modal="true"
-	>
-		<div class="w-full max-w-sm rounded-xl bg-white shadow-xl mx-4 p-6">
-			<h2 class="text-base font-semibold text-gray-900">Delete Token?</h2>
-			<p class="mt-2 text-sm text-gray-600">This permanently deletes <strong class="text-gray-800">{revokeTarget.name}</strong>. Type the token name to continue.</p>
-			<input type="text" bind:value={revokeName} placeholder={revokeTarget.name} class="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-red-500 focus:outline-none focus:ring-1 focus:ring-red-500" />
-			<div class="mt-5 flex justify-end gap-3">
-				<button type="button" onclick={() => { revokeTarget = null; revokeName = ''; }} class="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Cancel</button>
-				<button
-					type="button"
-					disabled={revokeName !== revokeTarget.name}
-					onclick={() => { const t = revokeTarget; if (t) handleRevoke(t); }}
-					class="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 transition disabled:opacity-50"
-				>
-					Delete
-				</button>
+<Modal bind:open={createModalOpen} title="Create Access Token">
+	<form onsubmit={(e) => { e.preventDefault(); handleCreateToken(); }} class="space-y-4">
+		{#if createError}
+			<p class="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{createError}</p>
+		{/if}
+		<div>
+			<label for="token-name" class="mb-1.5 block text-xs font-semibold text-gray-700 dark:text-gray-300">Token Name <span class="text-red-500">*</span></label>
+			<input id="token-name" type="text" bind:value={tokenName} placeholder="Enter a name for the token" maxlength="255" required class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100" />
+		</div>
+		<div>
+			<label for="token-expiry" class="mb-1.5 block text-xs font-semibold text-gray-700 dark:text-gray-300">Expiration Date <span class="text-red-500">*</span></label>
+			<select id="token-expiry" bind:value={expiresAt} required class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+				<option value="1">1 Day</option>
+				<option value="7">7 Days</option>
+				<option value="30">1 Month</option>
+				<option value="90">3 Months</option>
+				<option value="180">6 Months</option>
+				<option value="365">1 Year</option>
+				<option value="never">Never</option>
+			</select>
+		</div>
+		<div class="flex justify-end gap-3 pt-2">
+			<button type="button" onclick={() => (createModalOpen = false)} class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">Cancel</button>
+			<button type="submit" disabled={submitting} class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 disabled:opacity-50">{submitting ? 'Creating...' : 'Create'}</button>
+		</div>
+	</form>
+</Modal>
+
+<Modal bind:open={tokenModalOpen} title="View Token">
+	<div class="space-y-4">
+		<div>
+			<label for="new-token" class="mb-1.5 block text-xs font-semibold text-gray-700 dark:text-gray-300">Your New Access Token</label>
+			<div class="flex items-center gap-2">
+				<input id="new-token" type="text" readonly value={newlyCreatedToken ?? ''} class="w-full rounded-lg border border-gray-300 bg-gray-50 px-3.5 py-2.5 font-mono text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100" />
+				<button type="button" onclick={() => newlyCreatedToken && copyToClipboard(newlyCreatedToken)} class="rounded-lg bg-teal-600 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-500">Copy</button>
 			</div>
 		</div>
+		<div class="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/30">
+			<p class="text-sm font-semibold text-amber-800 dark:text-amber-300">Head's up!</p>
+			<p class="mt-1 text-xs text-amber-700 dark:text-amber-400">This is the only time you will be able to view or copy this token, so be sure to copy it now and store it in a secure location.</p>
+		</div>
+		<div class="flex justify-end pt-1">
+			<button type="button" onclick={() => { tokenModalOpen = false; newlyCreatedToken = null; }} class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">Close</button>
+		</div>
 	</div>
-{/if}
+</Modal>
 
-<!-- Close menus on outside click -->
-{#if revokeMenuOpen !== null}
-	<!-- svelte-ignore a11y_click_outside -->
-	<div
-		class="fixed inset-0 z-40"
-		onclick={() => revokeMenuOpen = null}
-		onkeydown={(e) => { if (e.key === 'Escape') revokeMenuOpen = null; }}
-		role="presentation"
-	></div>
-{/if}
+<Modal bind:open={editOpen} title="Edit Access Token">
+	<form onsubmit={(e) => { e.preventDefault(); handleRename(); }} class="space-y-4">
+		{#if editError}
+			<p class="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{editError}</p>
+		{/if}
+		<div>
+			<label for="edit-token-name" class="mb-1.5 block text-xs font-semibold text-gray-700 dark:text-gray-300">Token Name <span class="text-red-500">*</span></label>
+			<input id="edit-token-name" type="text" bind:value={editName} maxlength="255" required class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100" />
+		</div>
+		<div class="flex justify-end gap-3 pt-2">
+			<button type="button" onclick={() => (editOpen = false)} class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">Cancel</button>
+			<button type="submit" disabled={savingEdit} class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 disabled:opacity-50">{savingEdit ? 'Saving...' : 'Save changes'}</button>
+		</div>
+	</form>
+</Modal>
+
+<Modal bind:open={deleteOpen} title="Delete Access Token">
+	<div class="space-y-4">
+		<p class="text-sm text-gray-600 dark:text-gray-300">
+			This action will permanently delete the access token <strong>{deleteTarget?.name ?? ''}</strong>. To continue, type the token name below.
+		</p>
+		{#if deleteError}
+			<p class="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{deleteError}</p>
+		{/if}
+		<div>
+			<label for="delete-token-name" class="mb-1.5 block text-xs font-semibold text-gray-700 dark:text-gray-300">Token name <span class="text-red-500">*</span></label>
+			<input id="delete-token-name" type="text" bind:value={deleteName} placeholder={deleteTarget?.name ?? ''} class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-rose-600 focus:outline-none focus:ring-1 focus:ring-rose-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100" />
+		</div>
+		<div class="flex justify-end gap-3 pt-2">
+			<button type="button" onclick={() => (deleteOpen = false)} class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">Cancel</button>
+			<button type="button" onclick={handleDelete} disabled={deleting || deleteName !== (deleteTarget?.name ?? '')} class="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500 disabled:opacity-50">{deleting ? 'Deleting...' : 'Delete'}</button>
+		</div>
+	</div>
+</Modal>
+
+<Modal bind:open={bulkDeleteOpen} title="Delete Selected Access Tokens">
+	<div class="space-y-4">
+		<p class="text-sm text-gray-600 dark:text-gray-300">Are you sure you want to delete the selected access tokens? This action cannot be undone.</p>
+		<div class="flex justify-end gap-3 pt-2">
+			<button type="button" onclick={() => (bulkDeleteOpen = false)} class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">Cancel</button>
+			<button type="button" onclick={handleBulkDelete} disabled={bulkDeleting} class="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500 disabled:opacity-50">{bulkDeleting ? 'Deleting...' : 'Delete'}</button>
+		</div>
+	</div>
+</Modal>

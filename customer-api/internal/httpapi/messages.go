@@ -353,27 +353,23 @@ func (server *Server) messages(context fiber.Ctx) error {
 	rows, err := server.db.Query(fmt.Sprintf(`
 		SELECT m.id, COALESCE(s.sender_id, '—'), m.to, m.body, m.status, m.cost, m.parts,
 		       m.created_at, m.sent_at, m.delivered_at, m.failed_reason, COALESCE(m.operator_name, ''),
-		       COALESCE(NULLIF(m.sms_type, ''), CASE WHEN m.batch_id IS NULL THEN 'Transactional' ELSE 'Promotional' END),
-		       COALESCE(m.channel, ''), COALESCE(m.tariff_name, ''), COALESCE(m.source_ip, ''),
-		       COALESCE(m.request_id, ''), COALESCE(m.delivery_status, ''), COALESCE(m.source, 'web'),
-		       COALESCE(
-		           (SELECT t.balance_before FROM transactions t
-		            WHERE t.user_id = m.user_id
-		              AND ((t.transactionable_type IN ('message_batch', 'App\\Models\\Batch') AND t.transactionable_id = m.batch_id)
-		                OR (t.transactionable_type IN ('message', 'App\\Models\\Message') AND t.transactionable_id = m.id))
-		            ORDER BY t.id DESC LIMIT 1),
-		           0.00
-		       ) as previous_balance,
-		       COALESCE(
-		           (SELECT t.balance_after FROM transactions t
-		            WHERE t.user_id = m.user_id
-		              AND ((t.transactionable_type IN ('message_batch', 'App\\Models\\Batch') AND t.transactionable_id = m.batch_id)
-		                OR (t.transactionable_type IN ('message', 'App\\Models\\Message') AND t.transactionable_id = m.id))
-		            ORDER BY t.id DESC LIMIT 1),
-		           0.00
-		       ) as next_balance
+		       COALESCE(m.tariff_name, ''), COALESCE(m.source_ip, ''),
+		       COALESCE(m.delivery_status, ''), COALESCE(m.source, 'web'),
+		       m.batch_id, COALESCE(b.source_type, ''), COALESCE(b.total_recipients, 0),
+		       COALESCE(m.gateway_message_id, ''),
+		       (SELECT t.balance_before FROM transactions t
+		         WHERE t.user_id = m.user_id
+		           AND ((t.transactionable_type IN ('message_batch', 'App\\Models\\Batch') AND t.transactionable_id = m.batch_id)
+		             OR (t.transactionable_type IN ('message', 'App\\Models\\Message') AND t.transactionable_id = m.id))
+		         ORDER BY t.id DESC LIMIT 1) as previous_balance,
+		       (SELECT t.balance_after FROM transactions t
+		         WHERE t.user_id = m.user_id
+		           AND ((t.transactionable_type IN ('message_batch', 'App\\Models\\Batch') AND t.transactionable_id = m.batch_id)
+		             OR (t.transactionable_type IN ('message', 'App\\Models\\Message') AND t.transactionable_id = m.id))
+		         ORDER BY t.id DESC LIMIT 1) as next_balance
 		FROM messages m
 		LEFT JOIN senders s ON s.id = m.sender_id
+		LEFT JOIN batches b ON b.id = m.batch_id
 		%s
 		ORDER BY %s %s
 		LIMIT ? OFFSET ?
@@ -385,16 +381,19 @@ func (server *Server) messages(context fiber.Ctx) error {
 
 	items := []fiber.Map{}
 	for rows.Next() {
-		var id, parts int
-		var senderID, to, body, status, operatorName, smsType, channel, tariffName, sourceIP, requestID, deliveryStatus, source string
-		var cost, prevBalance, nextBalance float64
+		var id, parts, totalRecipients int
+		var senderID, to, body, status, operatorName, tariffName, sourceIP, deliveryStatus, source, sourceType, gatewayMessageID string
+		var batchID sql.NullInt64
+		var cost float64
+		var prevBalance, nextBalance sql.NullFloat64
 		var createdAt time.Time
 		var sentAt, deliveredAt *time.Time
 		var failedReason *string
 
 		if err := rows.Scan(&id, &senderID, &to, &body, &status, &cost, &parts,
 			&createdAt, &sentAt, &deliveredAt, &failedReason, &operatorName,
-			&smsType, &channel, &tariffName, &sourceIP, &requestID, &deliveryStatus, &source,
+			&tariffName, &sourceIP, &deliveryStatus, &source,
+			&batchID, &sourceType, &totalRecipients, &gatewayMessageID,
 			&prevBalance, &nextBalance); err != nil {
 			continue
 		}
@@ -403,6 +402,7 @@ func (server *Server) messages(context fiber.Ctx) error {
 		if op == "" {
 			op = operatorFromNumber(to)
 		}
+		smsType := resolvedSMSType(batchID.Valid, sourceType, totalRecipients)
 
 		items = append(items, fiber.Map{
 			"id":               id,
@@ -414,14 +414,14 @@ func (server *Server) messages(context fiber.Ctx) error {
 			"cost":             fmt.Sprintf("%.4f", cost),
 			"parts":            parts,
 			"sms_type":         smsType,
-			"channel":          channel,
+			"channel":          channelFromOperator(op),
 			"tariff_name":      tariffName,
 			"source_ip":        sourceIP,
-			"request_id":       requestID,
+			"request_id":       requestIDFromGateway(gatewayMessageID),
 			"delivery_status":  deliveryStatus,
 			"source":           source,
-			"previous_balance": fmt.Sprintf("%.4f", prevBalance),
-			"next_balance":     fmt.Sprintf("%.4f", nextBalance),
+			"previous_balance": nullableBalance(prevBalance),
+			"next_balance":     nullableBalance(nextBalance),
 			"created_at":       createdAt.Format(time.RFC3339),
 			"submitted_at":     createdAt.Format(time.RFC3339),
 			"sent_at":          apiTimePtr(sentAt),
@@ -445,22 +445,23 @@ func (server *Server) messageDetail(context fiber.Ctx) error {
 	}
 
 	var (
-		batchID                        sql.NullInt64
-		senderDBID                     sql.NullInt64
-		senderID, to, body, status     string
-		operatorName, failedReason     *string
-		deliveryStatus, source         sql.NullString
-		smsType, channel, tariffName   sql.NullString
-		sourceIP, requestID            sql.NullString
-		parts                          int
-		cost, prevBalance, nextBalance float64
-		createdAt, updatedAt           time.Time
-		sentAt, deliveredAt, failedAt  *time.Time
+		batchID                          sql.NullInt64
+		senderDBID                       sql.NullInt64
+		senderID, to, body, status       string
+		operatorName, failedReason       *string
+		deliveryStatus, source           sql.NullString
+		tariffName, sourceIP, sourceType sql.NullString
+		gatewayMessageID                 sql.NullString
+		totalRecipients                  int
+		parts                            int
+		cost, prevBalance, nextBalance   float64
+		createdAt, updatedAt             time.Time
+		sentAt, deliveredAt, failedAt    *time.Time
 	)
 	err = server.db.QueryRow(`
 		SELECT m.batch_id, m.sender_id, m.to, m.body, m.status, m.parts, m.cost,
 		       COALESCE(s.sender_id, ''), m.operator_name, m.failed_reason, m.delivery_status,
-		       m.source, m.sms_type, m.channel, m.tariff_name, m.source_ip, m.request_id,
+		       m.source, m.tariff_name, m.source_ip, COALESCE(b.source_type, ''), COALESCE(b.total_recipients, 0), COALESCE(m.gateway_message_id, ''),
 		       COALESCE(
 		           (SELECT t.balance_before FROM transactions t
 		            WHERE t.user_id = m.user_id
@@ -480,10 +481,11 @@ func (server *Server) messageDetail(context fiber.Ctx) error {
 		       m.created_at, m.updated_at, m.sent_at, m.delivered_at, m.failed_at
 		FROM messages m
 		LEFT JOIN senders s ON s.id = m.sender_id
+		LEFT JOIN batches b ON b.id = m.batch_id
 		WHERE m.id = ? AND m.user_id = ?
 	`, id, claims.UserID).Scan(&batchID, &senderDBID, &to, &body, &status, &parts, &cost,
 		&senderID, &operatorName, &failedReason, &deliveryStatus, &source,
-		&smsType, &channel, &tariffName, &sourceIP, &requestID, &prevBalance, &nextBalance,
+		&tariffName, &sourceIP, &sourceType, &totalRecipients, &gatewayMessageID, &prevBalance, &nextBalance,
 		&createdAt, &updatedAt, &sentAt, &deliveredAt, &failedAt)
 	if err == sql.ErrNoRows {
 		return context.Status(http.StatusNotFound).JSON(fiber.Map{"message": "Message not found."})
@@ -503,14 +505,7 @@ func (server *Server) messageDetail(context fiber.Ctx) error {
 	if failedReason != nil {
 		reason = *failedReason
 	}
-	resolvedType := nullStringValue(smsType)
-	if resolvedType == "" {
-		if batchID.Valid {
-			resolvedType = "Promotional"
-		} else {
-			resolvedType = "Transactional"
-		}
-	}
+	resolvedType := resolvedSMSType(batchID.Valid, sourceType.String, totalRecipients)
 
 	return context.JSON(fiber.Map{"data": fiber.Map{
 		"id":               id,
@@ -527,10 +522,10 @@ func (server *Server) messageDetail(context fiber.Ctx) error {
 		"delivery_status":  nullStringValue(deliveryStatus),
 		"source":           nullStringValue(source),
 		"sms_type":         resolvedType,
-		"channel":          nullStringValue(channel),
+		"channel":          channelFromOperator(op),
 		"tariff_name":      nullStringValue(tariffName),
 		"source_ip":        nullStringValue(sourceIP),
-		"request_id":       nullStringValue(requestID),
+		"request_id":       requestIDFromGateway(gatewayMessageID.String),
 		"previous_balance": fmt.Sprintf("%.4f", prevBalance),
 		"next_balance":     fmt.Sprintf("%.4f", nextBalance),
 		"error_message":    reason,
@@ -541,6 +536,13 @@ func (server *Server) messageDetail(context fiber.Ctx) error {
 		"delivered_at":     apiTimePtr(deliveredAt),
 		"failed_at":        apiTimePtr(failedAt),
 	}})
+}
+
+func nullableBalance(value sql.NullFloat64) any {
+	if value.Valid {
+		return fmt.Sprintf("%.4f", value.Float64)
+	}
+	return nil
 }
 
 func nullableInt64(value sql.NullInt64) any {
@@ -1322,23 +1324,17 @@ func (server *Server) batches(context fiber.Ctx) error {
 	args = append(args, perPage, offset)
 	rows, err := server.db.Query(`
 		SELECT m.id, m.to, m.body, COALESCE(s.sender_id, '—') as sender_id,
-		       m.status, m.cost, m.parts, m.created_at, m.sent_at, m.delivered_at, m.failed_reason,
-		       COALESCE(
-		           (SELECT t.balance_before FROM transactions t
-		            WHERE t.user_id = m.user_id
-		              AND ((t.transactionable_type IN ('message_batch', 'App\\Models\\Batch') AND t.transactionable_id = m.batch_id)
-		                OR (t.transactionable_type IN ('message', 'App\\Models\\Message') AND t.transactionable_id = m.id))
-		            ORDER BY t.id DESC LIMIT 1),
-		           0.00
-		       ) as previous_balance,
-		       COALESCE(
-		           (SELECT t.balance_after FROM transactions t
-		            WHERE t.user_id = m.user_id
-		              AND ((t.transactionable_type IN ('message_batch', 'App\\Models\\Batch') AND t.transactionable_id = m.batch_id)
-		                OR (t.transactionable_type IN ('message', 'App\\Models\\Message') AND t.transactionable_id = m.id))
-		            ORDER BY t.id DESC LIMIT 1),
-		           0.00
-		       ) as next_balance,
+		       m.status, m.cost, m.parts, m.created_at, m.sent_at, m.delivered_at, m.failed_at, m.failed_reason,
+		       (SELECT t.balance_before FROM transactions t
+		         WHERE t.user_id = m.user_id
+		           AND ((t.transactionable_type IN ('message_batch', 'App\\Models\\Batch') AND t.transactionable_id = m.batch_id)
+		             OR (t.transactionable_type IN ('message', 'App\\Models\\Message') AND t.transactionable_id = m.id))
+		         ORDER BY t.id DESC LIMIT 1) as previous_balance,
+		       (SELECT t.balance_after FROM transactions t
+		         WHERE t.user_id = m.user_id
+		           AND ((t.transactionable_type IN ('message_batch', 'App\\Models\\Batch') AND t.transactionable_id = m.batch_id)
+		             OR (t.transactionable_type IN ('message', 'App\\Models\\Message') AND t.transactionable_id = m.id))
+		         ORDER BY t.id DESC LIMIT 1) as next_balance,
 		       CASE
 		           WHEN b.source_type = 'manual' AND (b.total_recipients = 1 OR b.total_recipients IS NULL) THEN 'Transactional'
 		           WHEN b.source_type = 'single' OR m.batch_id IS NULL THEN 'Transactional'
@@ -1360,14 +1356,15 @@ func (server *Server) batches(context fiber.Ctx) error {
 	for rows.Next() {
 		var id, parts int
 		var to, body, senderID, status string
-		var cost, prevBalance, nextBalance float64
+		var cost float64
+		var prevBalance, nextBalance sql.NullFloat64
 		var createdAt time.Time
-		var sentAt, deliveredAt *time.Time
+		var sentAt, deliveredAt, failedAt *time.Time
 		var failedReason *string
 		var smsType string
 
 		if err := rows.Scan(&id, &to, &body, &senderID, &status, &cost, &parts,
-			&createdAt, &sentAt, &deliveredAt, &failedReason, &prevBalance, &nextBalance, &smsType); err != nil {
+			&createdAt, &sentAt, &deliveredAt, &failedAt, &failedReason, &prevBalance, &nextBalance, &smsType); err != nil {
 			continue
 		}
 
@@ -1379,12 +1376,13 @@ func (server *Server) batches(context fiber.Ctx) error {
 			"status":           status,
 			"cost":             fmt.Sprintf("%.4f", cost),
 			"parts":            parts,
-			"previous_balance": fmt.Sprintf("%.2f", prevBalance),
-			"next_balance":     fmt.Sprintf("%.2f", nextBalance),
+			"previous_balance": nullableBalance(prevBalance),
+			"next_balance":     nullableBalance(nextBalance),
 			"sms_type":         smsType,
 			"created_at":       createdAt.Format(time.RFC3339),
 			"sent_at":          apiTimePtr(sentAt),
 			"delivered_at":     apiTimePtr(deliveredAt),
+			"failed_at":        apiTimePtr(failedAt),
 			"failed_reason":    failedReason,
 		})
 	}
@@ -1815,7 +1813,54 @@ func operatorFromNumber(phone string) string {
 			return "Airtel"
 		}
 	}
-	return "Other"
+	return ""
+}
+
+// channelFromOperator mirrors ListMessages::resolveChannel's operator fallback
+// when the gateway payload has no billMsisdn.
+func channelFromOperator(operator string) string {
+	switch operator {
+	case "Grameenphone":
+		return "CH-01"
+	case "Teletalk":
+		return "CH-03"
+	case "Robi", "Banglalink", "Airtel":
+		return "CH-02"
+	default:
+		return ""
+	}
+}
+
+// requestIDFromGateway mirrors ListMessages::resolveRequestId: REQ- plus the
+// last six digits of the gateway message id, or the raw id when non-numeric.
+func requestIDFromGateway(gatewayMessageID string) string {
+	gatewayMessageID = strings.TrimSpace(gatewayMessageID)
+	if gatewayMessageID == "" {
+		return ""
+	}
+	var digits strings.Builder
+	for _, r := range gatewayMessageID {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+		}
+	}
+	if digits.Len() == 0 {
+		return "REQ-" + gatewayMessageID
+	}
+	value := digits.String()
+	if len(value) > 6 {
+		value = value[len(value)-6:]
+	}
+	return "REQ-" + value
+}
+
+// resolvedSMSType mirrors ListMessages::fallbackSmsType and CreateQuickMessage:
+// single-recipient/manual sends are transactional, bulk sends promotional.
+func resolvedSMSType(hasBatch bool, sourceType string, totalRecipients int) string {
+	if !hasBatch || sourceType == "single" || (sourceType == "manual" && totalRecipients <= 1) {
+		return "Transactional"
+	}
+	return "Promotional"
 }
 
 func normalizePhones(raw any) []string {

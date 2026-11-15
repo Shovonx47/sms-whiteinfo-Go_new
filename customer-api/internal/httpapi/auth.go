@@ -281,8 +281,9 @@ func (server *Server) updatePassword(context fiber.Ctx) error {
 	claims := customer(context)
 
 	var req struct {
-		CurrentPassword string `json:"current_password"`
-		Password        string `json:"password"`
+		CurrentPassword      string `json:"current_password"`
+		Password             string `json:"password"`
+		PasswordConfirmation string `json:"password_confirmation"`
 	}
 	if err := json.Unmarshal(context.Body(), &req); err != nil {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Invalid request."})
@@ -303,6 +304,11 @@ func (server *Server) updatePassword(context fiber.Ctx) error {
 	if len(req.Password) < 8 {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
 			"errors": fiber.Map{"password": []string{"Password must be at least 8 characters."}},
+		})
+	}
+	if req.PasswordConfirmation != "" && req.Password != req.PasswordConfirmation {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+			"errors": fiber.Map{"password": []string{"Password confirmation does not match."}},
 		})
 	}
 
