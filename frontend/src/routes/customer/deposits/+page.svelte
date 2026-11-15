@@ -93,6 +93,10 @@
 
 	onMount(() => {
 		const params = new URLSearchParams(window.location.search);
+		if (params.get('deposit') === '1') {
+			depositAmount = '';
+			makeDepositModalOpen = true;
+		}
 		const paymentStatus = params.get('payment_status');
 		if (paymentStatus) {
 			if (paymentStatus === 'completed') {

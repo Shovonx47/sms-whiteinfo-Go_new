@@ -50,9 +50,9 @@
 			section: 'Developer',
 			icon: 'code-bracket',
 			items: [
-				{ label: 'API Documentation', href: '/developer' },
-				{ label: 'API Token (API Key)', href: '/developer/access-tokens' },
-				{ label: 'IP Whitelist', href: '/customer/ip-whitelist' }
+				{ label: 'Access Tokens', href: '/developer/access-tokens' },
+				{ label: 'IP Whitelist', href: '/developer/ip-whitelists' },
+				{ label: 'API Documentation', href: '/docs' }
 			]
 		},
 		{
@@ -62,15 +62,12 @@
 				{ label: 'Messaging', href: '/analytics/messaging' },
 				{ label: 'Billing', href: '/analytics/billing' }
 			]
-		},
-		{
-			section: 'Account & Security',
-			icon: 'shield',
-			items: [
-				{ label: 'KYC Documents', href: '/account/kyc' }
-			]
 		}
 	];
+
+	let visibleSections = $derived(
+		navSections.filter((section) => section.section !== 'Developer' || auth.user?.api_access)
+	);
 
 	let { collapsed = $bindable(false) }: { collapsed: boolean } = $props();
 
@@ -240,7 +237,7 @@
 		</a>
 
 		<!-- Collapsible Sections -->
-		{#each navSections as section (section.section)}
+		{#each visibleSections as section (section.section)}
 			{@const isOpen = openSections[section.section] ?? true}
 			<div class="pt-2">
 				{#if !collapsed}
@@ -306,6 +303,20 @@
 					</div>
 				{/if}
 			</div>
+			{#if section.section === 'Messaging Management'}
+				<a
+					href="/account/kyc"
+					class="group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition {isActive('/account/kyc')
+						? 'bg-gray-100/80 text-teal-700 font-semibold dark:bg-gray-800 dark:text-teal-400'
+						: 'text-gray-700 hover:bg-gray-100/70 hover:text-gray-950 dark:text-gray-300 dark:hover:bg-gray-800/60 dark:hover:text-white'} {collapsed ? 'justify-center px-0' : ''}"
+					title={collapsed ? 'KYC Documents' : ''}
+				>
+					<svg class="h-4.5 w-4.5 shrink-0 text-gray-500" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+						{@html icons.shield}
+					</svg>
+					{#if !collapsed}<span class="truncate">KYC Documents</span>{/if}
+				</a>
+			{/if}
 		{/each}
 	</nav>
 

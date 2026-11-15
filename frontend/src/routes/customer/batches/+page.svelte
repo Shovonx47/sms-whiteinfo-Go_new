@@ -12,6 +12,7 @@
 		cost: string;
 		parts: number;
 		previous_balance: string;
+		next_balance: string;
 		sms_type: string;
 		created_at: string;
 		sent_at?: string;
@@ -28,6 +29,17 @@
 		total: number;
 		per_page: number;
 		current_page: number;
+	}
+
+	function formatDateTime(value?: string | null): string {
+		if (!value) return '—';
+		const date = new Date(value);
+		if (Number.isNaN(date.getTime())) return '—';
+		return date.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
+	}
+
+	function displayDate(log: MessageLog): string {
+		return formatDateTime(log.delivered_at ?? log.sent_at ?? log.created_at);
 	}
 
 	let logs = $state<MessageLog[]>([]);
@@ -291,19 +303,24 @@
 						<th class="py-3 px-4">SMS TYPE</th>
 						<th class="py-3 px-4 text-right">COST</th>
 						<th class="py-3 px-4 text-right">PREVIOUS BALANCE</th>
+						<th class="py-3 px-4 text-right">NEXT BALANCE</th>
+						<th class="py-3 px-4 text-right">SMS COUNT</th>
+						<th class="py-3 px-4">STATUS</th>
+						<th class="py-3 px-4">FAILURE REASON</th>
+						<th class="py-3 px-4">DATE &amp; TIME</th>
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-gray-100 bg-white">
 					{#if loading}
 						<tr>
-							<td colspan="6" class="py-12 text-center text-gray-500">
+							<td colspan="11" class="py-12 text-center text-gray-500">
 								<div class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-teal-600"></div>
 								<p class="mt-2 text-xs">Loading sent message logs...</p>
 							</td>
 						</tr>
 					{:else if logs.length === 0}
 						<tr>
-							<td colspan="6" class="py-12 text-center text-gray-500">
+							<td colspan="11" class="py-12 text-center text-gray-500">
 								<p class="text-sm font-medium text-gray-700">No message logs found</p>
 								<p class="mt-1 text-xs text-gray-400">Sent messages will appear here once dispatched.</p>
 							</td>
@@ -351,6 +368,31 @@
 								<td class="py-3 px-4 font-mono font-medium text-right text-gray-900 whitespace-nowrap">
 									BDT {Number(log.previous_balance).toFixed(2)}
 								</td>
+
+								<!-- Next Balance -->
+								<td class="py-3 px-4 font-mono font-medium text-right text-gray-900 whitespace-nowrap">
+									BDT {Number(log.next_balance ?? 0).toFixed(2)}
+								</td>
+
+								<!-- SMS Count -->
+								<td class="py-3 px-4 font-mono text-right text-gray-700">{log.parts}</td>
+
+								<!-- Status -->
+								<td class="py-3 px-4 whitespace-nowrap">
+									<span class="inline-flex items-center rounded-md px-2.5 py-0.5 text-[11px] font-semibold border {log.status === 'delivered'
+										? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+										: log.status === 'failed' || log.status === 'dlr_failed'
+											? 'bg-rose-50 text-rose-700 border-rose-200'
+											: log.status === 'sent'
+												? 'bg-sky-50 text-sky-700 border-sky-200'
+												: 'bg-amber-50 text-amber-700 border-amber-200'}">{log.status}</span>
+								</td>
+
+								<!-- Failure Reason -->
+								<td class="py-3 px-4 max-w-[180px] truncate text-gray-600" title={log.failed_reason ?? ''}>{log.failed_reason || '—'}</td>
+
+								<!-- Date & Time -->
+								<td class="py-3 px-4 text-gray-700 whitespace-nowrap">{displayDate(log)}</td>
 							</tr>
 						{/each}
 					{/if}

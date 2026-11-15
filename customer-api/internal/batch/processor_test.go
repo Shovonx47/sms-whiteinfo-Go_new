@@ -79,10 +79,10 @@ func TestBatchProcessor_Manual_And_Dedupe_And_Invalid(t *testing.T) {
 
 	// Recipients with 2 valid, 1 duplicate, 1 invalid
 	recipients := []map[string]any{
-		{"phone": "01712345678"},             // Valid 1
-		{"phone": "+8801712345678"},           // Duplicate of Valid 1
-		{"phone": "01898765432"},             // Valid 2
-		{"phone": "12345"},                   // Invalid number
+		{"phone": "01712345678"},    // Valid 1
+		{"phone": "+8801712345678"}, // Duplicate of Valid 1
+		{"phone": "01898765432"},    // Valid 2
+		{"phone": "12345"},          // Invalid number
 	}
 
 	configJSON, _ := json.Marshal(map[string]any{

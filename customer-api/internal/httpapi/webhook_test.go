@@ -204,4 +204,49 @@ func TestPaymentAndSmsWebhooks(t *testing.T) {
 	if smsStatus != "delivered" {
 		t.Errorf("Expected SMS status to be updated to 'delivered', got '%s'", smsStatus)
 	}
+
+	// 4. Failed DLR must mark the message failed and refund its cost exactly once.
+	gwFailID := fmt.Sprintf("gw_fail_%d", now)
+	mfRes, _ := db.ExecContext(ctx, `
+		INSERT INTO messages (user_id, `+"`to`"+`, body, status, cost, gateway_message_id, created_at, updated_at)
+		VALUES (?, '8801700000010', 'Failed DLR msg', 'sent', 0.50, ?, NOW(), NOW())
+	`, custID, gwFailID)
+	failID, _ := mfRes.LastInsertId()
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM transactions WHERE user_id = ? AND transactionable_id = ?", custID, failID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM messages WHERE id = ?", failID)
+	}()
+
+	reqFail := httptest.NewRequest("GET", fmt.Sprintf("/webhooks/sms/infozillion?Message_ID=%s&Status=REJECTD", gwFailID), nil)
+	respFail, err := app.Test(reqFail)
+	if err != nil || respFail.StatusCode != http.StatusOK {
+		t.Fatalf("SMS failure DLR request failed: %v / %d", err, respFail.StatusCode)
+	}
+
+	var failStatus, failReason string
+	_ = db.QueryRowContext(ctx, "SELECT status, COALESCE(failed_reason, '') FROM messages WHERE id = ?", failID).Scan(&failStatus, &failReason)
+	if failStatus != "failed" {
+		t.Errorf("Expected failed DLR to mark message 'failed', got %q", failStatus)
+	}
+	if failReason == "" {
+		t.Error("Expected failed DLR to store a failure reason")
+	}
+	var balanceAfterFail float64
+	_ = db.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = ?", custID).Scan(&balanceAfterFail)
+	if balanceAfterFail != 150.50 {
+		t.Errorf("Expected refunded balance 150.50, got %.2f", balanceAfterFail)
+	}
+	var refunds int
+	_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND transactionable_id = ? AND direction = 'credit'", custID, failID).Scan(&refunds)
+	if refunds != 1 {
+		t.Errorf("Expected exactly one refund transaction, got %d", refunds)
+	}
+
+	// Duplicate failure callbacks must not refund twice.
+	reqFailDup := httptest.NewRequest("GET", fmt.Sprintf("/webhooks/sms/infozillion?Message_ID=%s&Status=REJECTD", gwFailID), nil)
+	_, _ = app.Test(reqFailDup)
+	_ = db.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = ?", custID).Scan(&balanceAfterFail)
+	if balanceAfterFail != 150.50 {
+		t.Errorf("Duplicate failure DLR refunded twice; balance %.2f", balanceAfterFail)
+	}
 }

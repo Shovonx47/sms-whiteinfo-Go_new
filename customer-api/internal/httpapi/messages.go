@@ -445,17 +445,17 @@ func (server *Server) messageDetail(context fiber.Ctx) error {
 	}
 
 	var (
-		batchID                       sql.NullInt64
-		senderDBID                    sql.NullInt64
-		senderID, to, body, status    string
-		operatorName, failedReason    *string
-		deliveryStatus, source        sql.NullString
-		smsType, channel, tariffName  sql.NullString
-		sourceIP, requestID           sql.NullString
-		parts                         int
+		batchID                        sql.NullInt64
+		senderDBID                     sql.NullInt64
+		senderID, to, body, status     string
+		operatorName, failedReason     *string
+		deliveryStatus, source         sql.NullString
+		smsType, channel, tariffName   sql.NullString
+		sourceIP, requestID            sql.NullString
+		parts                          int
 		cost, prevBalance, nextBalance float64
-		createdAt, updatedAt          time.Time
-		sentAt, deliveredAt, failedAt *time.Time
+		createdAt, updatedAt           time.Time
+		sentAt, deliveredAt, failedAt  *time.Time
 	)
 	err = server.db.QueryRow(`
 		SELECT m.batch_id, m.sender_id, m.to, m.body, m.status, m.parts, m.cost,
@@ -826,6 +826,9 @@ func (server *Server) sendMessage(context fiber.Ctx) error {
 	if len(phones) == 0 {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "At least one valid phone number is required."})
 	}
+	if len(phones) > 1 {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Quick Message only supports a single recipient. Use Bulk SMS for multiple recipients."})
+	}
 
 	_, _, maxRate, errMsg, code := server.resolveSenderAndRates(context.Context(), claims.UserID, req.SenderID)
 	if code != 0 {
@@ -922,6 +925,9 @@ func (server *Server) scheduleMessage(context fiber.Ctx) error {
 	phones := normalizePhones(req.Phones)
 	if len(phones) == 0 {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "At least one valid phone number is required."})
+	}
+	if len(phones) > 1 {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Quick Message only supports a single recipient. Use Bulk SMS for multiple recipients."})
 	}
 
 	scheduledAt, err := parseScheduledTime(req.ScheduledDate, req.ScheduledHour, req.ScheduledMinute, req.ScheduledPeriod)
@@ -1325,6 +1331,14 @@ func (server *Server) batches(context fiber.Ctx) error {
 		            ORDER BY t.id DESC LIMIT 1),
 		           0.00
 		       ) as previous_balance,
+		       COALESCE(
+		           (SELECT t.balance_after FROM transactions t
+		            WHERE t.user_id = m.user_id
+		              AND ((t.transactionable_type IN ('message_batch', 'App\\Models\\Batch') AND t.transactionable_id = m.batch_id)
+		                OR (t.transactionable_type IN ('message', 'App\\Models\\Message') AND t.transactionable_id = m.id))
+		            ORDER BY t.id DESC LIMIT 1),
+		           0.00
+		       ) as next_balance,
 		       CASE
 		           WHEN b.source_type = 'manual' AND (b.total_recipients = 1 OR b.total_recipients IS NULL) THEN 'Transactional'
 		           WHEN b.source_type = 'single' OR m.batch_id IS NULL THEN 'Transactional'
@@ -1346,14 +1360,14 @@ func (server *Server) batches(context fiber.Ctx) error {
 	for rows.Next() {
 		var id, parts int
 		var to, body, senderID, status string
-		var cost, prevBalance float64
+		var cost, prevBalance, nextBalance float64
 		var createdAt time.Time
 		var sentAt, deliveredAt *time.Time
 		var failedReason *string
 		var smsType string
 
 		if err := rows.Scan(&id, &to, &body, &senderID, &status, &cost, &parts,
-			&createdAt, &sentAt, &deliveredAt, &failedReason, &prevBalance, &smsType); err != nil {
+			&createdAt, &sentAt, &deliveredAt, &failedReason, &prevBalance, &nextBalance, &smsType); err != nil {
 			continue
 		}
 
@@ -1363,9 +1377,10 @@ func (server *Server) batches(context fiber.Ctx) error {
 			"body":             body,
 			"sender_id":        senderID,
 			"status":           status,
-			"cost":             fmt.Sprintf("%.2f", cost),
+			"cost":             fmt.Sprintf("%.4f", cost),
 			"parts":            parts,
 			"previous_balance": fmt.Sprintf("%.2f", prevBalance),
+			"next_balance":     fmt.Sprintf("%.2f", nextBalance),
 			"sms_type":         smsType,
 			"created_at":       createdAt.Format(time.RFC3339),
 			"sent_at":          apiTimePtr(sentAt),

@@ -9,6 +9,10 @@
 	let showPassword = $state(false);
 	let submitting = $state(false);
 	let errorMsg = $state('');
+	let twoFactorRequired = $state(false);
+	let twoFactorCode = $state('');
+	let useRecoveryCode = $state(false);
+	let recoveryCode = $state('');
 
 	async function handleSubmit(e: SubmitEvent) {
 		e.preventDefault();
@@ -17,12 +21,17 @@
 		submitting = true;
 		errorMsg = '';
 
-		const result = await auth.login(email, password, remember);
+		const result = await auth.login(email, password, remember, twoFactorCode, recoveryCode);
 		submitting = false;
 
 		if (result.success) {
 			toast.success('Welcome back!', `Signed in as ${auth.user?.name}`);
 			goto('/customer');
+		} else if (result.twoFactorRequired) {
+			twoFactorRequired = true;
+			errorMsg = twoFactorCode || recoveryCode ? (result.message ?? 'The authenticator code is invalid.') : '';
+			twoFactorCode = '';
+			recoveryCode = '';
 		} else {
 			errorMsg = result.message ?? 'Login failed';
 		}
@@ -139,6 +148,20 @@
 						</button>
 					</div>
 				</div>
+
+				{#if twoFactorRequired}
+					<div class="rounded-xl border border-teal-200 bg-teal-50/50 p-4 dark:border-teal-900/50 dark:bg-teal-950/20">
+						<p class="text-xs font-semibold text-teal-800 dark:text-teal-300">Two-factor authentication</p>
+						{#if useRecoveryCode}
+							<input type="text" bind:value={recoveryCode} placeholder="Recovery code (xxxx-xxxx)" class="mt-2 w-full rounded-lg border border-teal-200 bg-white px-3 py-2 font-mono text-sm dark:border-teal-800 dark:bg-gray-900 dark:text-white" />
+						{:else}
+							<input type="text" bind:value={twoFactorCode} inputmode="numeric" maxlength="6" placeholder="6-digit authenticator code" class="mt-2 w-full rounded-lg border border-teal-200 bg-white px-3 py-2 font-mono text-sm tracking-[0.3em] dark:border-teal-800 dark:bg-gray-900 dark:text-white" />
+						{/if}
+						<button type="button" onclick={() => { useRecoveryCode = !useRecoveryCode; twoFactorCode = ''; recoveryCode = ''; }} class="mt-2 text-[11px] font-medium text-teal-700 hover:underline dark:text-teal-400">
+							{useRecoveryCode ? 'Use authenticator code instead' : 'Use a recovery code'}
+						</button>
+					</div>
+				{/if}
 
 				<!-- Remember Me -->
 				<div class="flex items-center gap-2">

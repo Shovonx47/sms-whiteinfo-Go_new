@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { toast } from '$lib/components/Toast.svelte';
 	import { auth } from '$lib/stores/auth.svelte.js';
-	import { api, ApiError } from '$lib/api.js';
+	import { api, ApiError, API_BASE_URL } from '$lib/api.js';
 	import { onMount, onDestroy } from 'svelte';
 
 	interface Props {
@@ -59,6 +59,13 @@
 	let mediaStream = $state<MediaStream | null>(null);
 	let cameraError = $state('');
 	let isQrModalOpen = $state(false);
+	let qrDataUri = $state('');
+	let qrLoading = $state(false);
+	let qrError = $state('');
+	let qrSecondsLeft = $state(0);
+	let qrSessionToken = $state('');
+	let qrPollTimer: number | null = null;
+	let qrCountdownTimer: number | null = null;
 
 	// Business Information
 	let businessCollapsed = $state(false);
@@ -103,8 +110,73 @@
 	onDestroy(() => {
 		if (emailCooldownTimer) clearInterval(emailCooldownTimer);
 		if (phoneCooldownTimer) clearInterval(phoneCooldownTimer);
+		stopQrPolling();
 		stopCamera();
 	});
+
+	function stopQrPolling() {
+		if (qrPollTimer) {
+			clearInterval(qrPollTimer);
+			qrPollTimer = null;
+		}
+		if (qrCountdownTimer) {
+			clearInterval(qrCountdownTimer);
+			qrCountdownTimer = null;
+		}
+	}
+
+	async function openQrModal() {
+		isQrModalOpen = true;
+		qrLoading = true;
+		qrError = '';
+		qrDataUri = '';
+		qrSessionToken = '';
+		stopQrPolling();
+		try {
+			const res = await fetch(`${API_BASE_URL}/phone-photo/session`, { method: 'POST' });
+			const data = await res.json();
+			if (!res.ok || !data.qr_data_uri) {
+				throw new Error(data.error || 'Unable to create a phone photo session.');
+			}
+			qrDataUri = data.qr_data_uri;
+			qrSessionToken = data.session_token;
+			const expires = new Date(data.expires_at).getTime();
+			qrSecondsLeft = Math.max(0, Math.floor((expires - Date.now()) / 1000));
+
+			qrCountdownTimer = window.setInterval(() => {
+				qrSecondsLeft = Math.max(0, qrSecondsLeft - 1);
+				if (qrSecondsLeft === 0) stopQrPolling();
+			}, 1000);
+
+			qrPollTimer = window.setInterval(async () => {
+				if (!qrSessionToken) return;
+				try {
+					const statusRes = await fetch(`${API_BASE_URL}/phone-photo/${qrSessionToken}/status`);
+					const statusData = await statusRes.json();
+					if (statusData.status === 'completed' && statusData.photo_data) {
+						livePhoto = statusData.photo_data;
+						isQrModalOpen = false;
+						stopQrPolling();
+						toast.success('Live Photo Received', 'Your phone photo was uploaded successfully.');
+					} else if (statusData.status === 'expired') {
+						stopQrPolling();
+						qrError = 'This session has expired. Open a new QR code to try again.';
+					}
+				} catch {
+					// Transient polling failure; the next tick retries.
+				}
+			}, 2000);
+		} catch (err) {
+			qrError = err instanceof Error ? err.message : 'Unable to create a phone photo session.';
+		} finally {
+			qrLoading = false;
+		}
+	}
+
+	function closeQrModal() {
+		isQrModalOpen = false;
+		stopQrPolling();
+	}
 
 	// Email OTP Actions
 	async function handleSendEmailOtp() {
@@ -962,7 +1034,7 @@
 									</button>
 									<button
 										type="button"
-										onclick={() => (isQrModalOpen = true)}
+										onclick={openQrModal}
 										class="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-5 py-2.5 text-xs font-semibold text-gray-700 shadow-sm transition hover:border-teal-500 hover:text-teal-600 focus:ring-4 focus:ring-teal-500/10 cursor-pointer dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:text-teal-400"
 									>
 										<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -1235,15 +1307,29 @@
 			</p>
 			<div class="my-4 flex justify-center">
 				<div class="rounded-xl border border-gray-200 bg-white p-3 shadow-inner dark:border-gray-700">
-					<!-- QR representation -->
-					<div class="flex h-40 w-40 items-center justify-center rounded-lg bg-gray-50 font-mono text-[10px] text-gray-400 dark:bg-gray-800">
-						[QR Code Available On HTTPS / Production Host]
-					</div>
+					{#if qrLoading}
+						<div class="flex h-40 w-40 items-center justify-center rounded-lg bg-gray-50 text-[10px] text-gray-400 dark:bg-gray-800">Generating secure session…</div>
+					{:else if qrDataUri}
+						<img src={qrDataUri} alt="Scan to capture your live photo on your phone" class="h-40 w-40 rounded-lg" />
+					{:else}
+						<div class="flex h-40 w-40 items-center justify-center rounded-lg bg-rose-50 p-3 text-center text-[10px] text-rose-600 dark:bg-rose-950/30">
+							{qrError || 'Unable to create a photo session.'}
+						</div>
+					{/if}
 				</div>
 			</div>
+			{#if qrDataUri}
+				<p class="text-[11px] text-gray-500 dark:text-gray-400">
+					{#if qrSecondsLeft > 0}
+						Waiting for your phone photo… expires in {Math.floor(qrSecondsLeft / 60)}:{String(qrSecondsLeft % 60).padStart(2, '0')}
+					{:else}
+						This QR code has expired. Close and open a new one.
+					{/if}
+				</p>
+			{/if}
 			<button
 				type="button"
-				onclick={() => (isQrModalOpen = false)}
+				onclick={closeQrModal}
 				class="w-full rounded-xl border border-gray-300 bg-white py-2 text-xs font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
 			>
 				Close

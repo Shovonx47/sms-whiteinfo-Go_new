@@ -41,7 +41,10 @@
 
 	let data = $state<AnalyticsData | null>(null);
 	let loading = $state(true);
-	let range = $state<'7d' | '30d' | 'today'>('7d');
+	type RangeKey = 'today' | 'yesterday' | 'this_week' | '7d' | '30d' | 'this_month' | 'this_year' | 'custom';
+	let range = $state<RangeKey>('7d');
+	let customFrom = $state('');
+	let customTo = $state('');
 	let exportModalOpen = $state(false);
 	let exportFormat = $state<'csv' | 'pdf'>('csv');
 	let exporting = $state(false);
@@ -50,6 +53,10 @@
 		exporting = true;
 		try {
 			const params = new URLSearchParams({ range, format: exportFormat });
+			if (range === 'custom') {
+				params.set('from', customFrom);
+				params.set('to', customTo);
+			}
 			const blob = await api.download(`/api/v1/customer/analytics/messaging/export?${params}`);
 			const url = URL.createObjectURL(blob);
 			const a = document.createElement('a');
@@ -71,7 +78,12 @@
 	async function loadAnalytics() {
 		loading = true;
 		try {
-			const res = await api.get<{ data: AnalyticsData }>(`/api/v1/customer/analytics/messaging?range=${range}`);
+			const params = new URLSearchParams({ range });
+			if (range === 'custom') {
+				params.set('from', customFrom);
+				params.set('to', customTo);
+			}
+			const res = await api.get<{ data: AnalyticsData }>(`/api/v1/customer/analytics/messaging?${params}`);
 			data = res.data;
 		} catch {
 			data = null;
@@ -111,22 +123,25 @@
 				</svg>
 				Export As
 			</button>
-			<div class="flex items-center gap-1 rounded-lg border border-gray-200 bg-white p-1 shadow-xs dark:border-gray-800 dark:bg-gray-900">
-			{#each [
-				{ id: 'today', label: 'Today' },
-				{ id: '7d', label: 'Last 7 Days' },
-				{ id: '30d', label: 'Last 30 Days' }
-			] as tab (tab.id)}
-				<button
-					type="button"
-					onclick={() => { range = tab.id as typeof range; loadAnalytics(); }}
-					class="rounded-md px-3 py-1.5 text-xs font-semibold transition
-						{range === tab.id ? 'bg-teal-600 text-white shadow-xs' : 'text-gray-600 hover:text-gray-950 dark:text-gray-400 dark:hover:text-gray-200'}"
-				>
-					{tab.label}
-				</button>
-			{/each}
-			</div>
+			<select
+				bind:value={range}
+				onchange={loadAnalytics}
+				class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-xs dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200"
+			>
+				<option value="today">Today</option>
+				<option value="yesterday">Yesterday</option>
+				<option value="this_week">This Week</option>
+				<option value="7d">Last 7 Days</option>
+				<option value="30d">Last 30 Days</option>
+				<option value="this_month">This Month</option>
+				<option value="this_year">This Year</option>
+				<option value="custom">Custom Range</option>
+			</select>
+			{#if range === 'custom'}
+				<input type="date" bind:value={customFrom} onchange={loadAnalytics} class="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200" />
+				<span class="text-xs text-gray-400">to</span>
+				<input type="date" bind:value={customTo} onchange={loadAnalytics} class="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200" />
+			{/if}
 		</div>
 	</div>
 

@@ -27,6 +27,7 @@
 	let bulkDeleting = $state(false);
 	let perPage = $state(10);
 	let currentPage = $state(1);
+	let totalPages = $derived(Math.max(1, Math.ceil((meta.total || 0) / perPage)));
 
 	let allSelected = $derived(
 		templates.length > 0 && templates.every((t) => selectedIds.includes(t.id))
@@ -380,7 +381,14 @@
 			<div>
 				Showing {filteredTemplates.length > 0 ? (currentPage - 1) * perPage + 1 : 0} to {Math.min(currentPage * perPage, meta.total)} of {meta.total} results
 			</div>
-			<div class="flex items-center gap-2">
+			<div class="flex items-center gap-3">
+				{#if totalPages > 1}
+					<div class="flex items-center gap-1">
+						<button type="button" disabled={currentPage <= 1} onclick={() => load(currentPage - 1)} class="rounded border border-gray-200 px-2 py-1 text-xs disabled:opacity-40 cursor-pointer">Prev</button>
+						<span class="px-2 text-xs">{currentPage} / {totalPages}</span>
+						<button type="button" disabled={currentPage >= totalPages} onclick={() => load(currentPage + 1)} class="rounded border border-gray-200 px-2 py-1 text-xs disabled:opacity-40 cursor-pointer">Next</button>
+					</div>
+				{/if}
 				<span class="text-xs text-gray-500">Per page</span>
 				<select
 					bind:value={perPage}

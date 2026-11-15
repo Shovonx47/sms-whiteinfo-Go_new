@@ -330,7 +330,7 @@ func (server *Server) pricingReport(c fiber.Ctx) error {
 	})
 }
 
-func resolveAnalyticsDateRange(rangeParam string) (time.Time, time.Time) {
+func resolveAnalyticsDateRange(rangeParam, fromParam, toParam string) (time.Time, time.Time) {
 	now := time.Now()
 	endOfToday := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, now.Location())
 	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -341,6 +341,9 @@ func resolveAnalyticsDateRange(rangeParam string) (time.Time, time.Time) {
 	case "yesterday":
 		y := startOfToday.AddDate(0, 0, -1)
 		return y, time.Date(y.Year(), y.Month(), y.Day(), 23, 59, 59, 0, now.Location())
+	case "this_week":
+		offset := (int(now.Weekday()) + 6) % 7 // Monday is the first day of the week.
+		return startOfToday.AddDate(0, 0, -offset), endOfToday
 	case "this_month":
 		first := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		return first, endOfToday
@@ -349,8 +352,22 @@ func resolveAnalyticsDateRange(rangeParam string) (time.Time, time.Time) {
 		firstLast := firstThis.AddDate(0, -1, 0)
 		endLast := firstThis.Add(-time.Second)
 		return firstLast, endLast
+	case "this_year":
+		return time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location()), endOfToday
+	case "custom":
+		from, fromErr := time.ParseInLocation("2006-01-02", strings.TrimSpace(fromParam), now.Location())
+		to, toErr := time.ParseInLocation("2006-01-02", strings.TrimSpace(toParam), now.Location())
+		if fromErr == nil && toErr == nil {
+			if to.Before(from) {
+				from, to = to, from
+			}
+			return from, time.Date(to.Year(), to.Month(), to.Day(), 23, 59, 59, 0, now.Location())
+		}
+		return startOfToday.AddDate(0, 0, -29), endOfToday
 	case "30d", "last_30_days":
 		return startOfToday.AddDate(0, 0, -29), endOfToday
+	case "90d", "last_90_days":
+		return startOfToday.AddDate(0, 0, -89), endOfToday
 	default: // "7d" / "last_7_days"
 		return startOfToday.AddDate(0, 0, -6), endOfToday
 	}
@@ -522,7 +539,7 @@ func (server *Server) buildMessagingAnalyticsData(ctx context.Context, userID in
 
 func (server *Server) messagingAnalytics(c fiber.Ctx) error {
 	claims := customer(c)
-	from, to := resolveAnalyticsDateRange(c.Query("range", "7d"))
+	from, to := resolveAnalyticsDateRange(c.Query("range", "7d"), c.Query("from"), c.Query("to"))
 
 	payload, err := server.buildMessagingAnalyticsData(c.Context(), claims.UserID, from, to)
 	if err != nil {
@@ -534,7 +551,7 @@ func (server *Server) messagingAnalytics(c fiber.Ctx) error {
 
 func (server *Server) exportMessagingAnalytics(c fiber.Ctx) error {
 	claims := customer(c)
-	from, to := resolveAnalyticsDateRange(c.Query("range", "7d"))
+	from, to := resolveAnalyticsDateRange(c.Query("range", "7d"), c.Query("from"), c.Query("to"))
 	format := strings.ToLower(strings.TrimSpace(c.Query("format", "csv")))
 
 	payload, err := server.buildMessagingAnalyticsData(c.Context(), claims.UserID, from, to)

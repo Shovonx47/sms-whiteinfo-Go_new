@@ -48,27 +48,28 @@ func pdfTruncate(value string, limit int) string {
 	if len(value) <= limit {
 		return value
 	}
-	return value[:limit-1] + "…"
+	return value[:limit-1] + "..."
 }
 
 // buildMessagesPDF renders the export rows into a landscape PDF without
 // external dependencies. Non-ASCII characters are rendered as "?".
 func buildMessagesPDF(rows []messagePDFRow) []byte {
 	const (
-		pageWidth  = 842.0
-		pageHeight = 595.0
+		pageWidth   = 842.0
+		pageHeight  = 595.0
 		rowsPerPage = 28
 	)
 
 	pages := [][]messagePDFRow{}
-	for start := 0; start < len(rows) || start == 0; start += rowsPerPage {
-		end := start + rowsPerPage
-		if end > len(rows) {
-			end = len(rows)
-		}
-		pages = append(pages, rows[start:end])
-		if end == len(rows) {
-			break
+	if len(rows) == 0 {
+		pages = append(pages, []messagePDFRow{})
+	} else {
+		for start := 0; start < len(rows); start += rowsPerPage {
+			end := start + rowsPerPage
+			if end > len(rows) {
+				end = len(rows)
+			}
+			pages = append(pages, rows[start:end])
 		}
 	}
 
@@ -77,27 +78,19 @@ func buildMessagesPDF(rows []messagePDFRow) []byte {
 		var content strings.Builder
 		content.WriteString(pdfText(32, 552, "F2", 16, "Sent Messages Report"))
 		content.WriteString(pdfText(32, 532, "F1", 8,
-			fmt.Sprintf("Generated %s  •  Page %d of %d", time.Now().Format("02 Jan 2006 15:04"), pageIndex+1, len(pages))))
+			fmt.Sprintf("Generated %s - Page %d of %d", time.Now().Format("02 Jan 2006 15:04"), pageIndex+1, len(pages))))
 
-		columns := []struct {
+		headerY := 506.0
+		headers := []struct {
 			x     float64
 			label string
 		}{
 			{32, "Message ID"}, {92, "Recipient"}, {170, "Sender"}, {232, "Content"},
-			{470, "Parts"}, {505, "Cost"}, {555, "Status"}, {625, "Operator"},
-			{700, "Submitted"},
+			{470, "Parts"}, {505, "Cost"}, {555, "Status"}, {625, "Operator"}, {700, "Submitted"},
 		}
-		headerY := 506.0
-		content.WriteString(pdfText(32, headerY, "F2", 7, "Message ID"))
-		content.WriteString(pdfText(92, headerY, "F2", 7, "Recipient"))
-		content.WriteString(pdfText(170, headerY, "F2", 7, "Sender"))
-		content.WriteString(pdfText(232, headerY, "F2", 7, "Content"))
-		content.WriteString(pdfText(470, headerY, "F2", 7, "Parts"))
-		content.WriteString(pdfText(505, headerY, "F2", 7, "Cost"))
-		content.WriteString(pdfText(555, headerY, "F2", 7, "Status"))
-		content.WriteString(pdfText(625, headerY, "F2", 7, "Operator"))
-		content.WriteString(pdfText(700, headerY, "F2", 7, "Submitted"))
-		_ = columns
+		for _, header := range headers {
+			content.WriteString(pdfText(header.x, headerY, "F2", 7, header.label))
+		}
 
 		y := headerY - 14
 		for _, row := range pageRows {
@@ -116,43 +109,47 @@ func buildMessagesPDF(rows []messagePDFRow) []byte {
 		streams = append(streams, content.String())
 	}
 
+	// Object layout: 1 catalog, 2 page tree, 3 Helvetica, 4 Helvetica-Bold,
+	// then a page/content pair for every page.
+	pageObjectID := func(index int) int { return 5 + index*2 }
+	contentObjectID := func(index int) int { return 6 + index*2 }
+
+	kids := make([]string, 0, len(pages))
+	for index := range pages {
+		kids = append(kids, fmt.Sprintf("%d 0 R", pageObjectID(index)))
+	}
+
 	var buffer bytes.Buffer
 	buffer.WriteString("%PDF-1.4\n")
 	offsets := make([]int, 0)
-	objectCount := 3 + len(pages)*2
 	writeObject := func(number int, body string) {
-		offsets = append(offsets, buffer.Len())
+		for len(offsets) < number-1 {
+			offsets = append(offsets, 0)
+		}
+		offset := buffer.Len()
 		fmt.Fprintf(&buffer, "%d 0 obj\n%s\nendobj\n", number, body)
+		if len(offsets) == number-1 {
+			offsets = append(offsets, offset)
+		} else {
+			offsets[number-1] = offset
+		}
 	}
 
-	pagesKids := make([]string, 0, len(pages))
-	pageObjectStart := 4
-	for index := range pages {
-		pagesKids = append(pagesKids, fmt.Sprintf("%d 0 R", pageObjectStart+index*2))
-	}
 	writeObject(1, "<< /Type /Catalog /Pages 2 0 R >>")
-	writeObject(2, fmt.Sprintf("<< /Type /Pages /Count %d /Kids [%s] >>", len(pages), strings.Join(pagesKids, " ")))
-	writeObject(3, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
-	_ = objectCount
+	writeObject(2, fmt.Sprintf("<< /Type /Pages /Count %d /Kids [%s] >>", len(pages), strings.Join(kids, " ")))
+	writeObject(3, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+	writeObject(4, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
 
-	contentObject := 4 + len(pages)*2
 	for index, stream := range streams {
-		pageObject := pageObjectStart + index*2
-		writeObject(pageObject, fmt.Sprintf(
-			"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %.0f %.0f] /Resources << /Font << /F1 3 0 R /F2 %d 0 R >> >> /Contents %d 0 R >>",
-			pageWidth, pageHeight, contentObject+index, contentObject+index,
+		writeObject(pageObjectID(index), fmt.Sprintf(
+			"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %.0f %.0f] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents %d 0 R >>",
+			pageWidth, pageHeight, contentObjectID(index),
 		))
-		contentOffset := buffer.Len()
-		fmt.Fprintf(&buffer, "%d 0 obj\n<< /Length %d >>\nstream\n%s\nendstream\nendobj\n", contentObject+index, len(stream), stream)
-		offsets = append(offsets, contentOffset)
+		writeObject(contentObjectID(index), fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(stream), stream))
 	}
-
-	boldFontObject := 3 + len(pages)*2 + 1
-	// Font object 3 is Helvetica; add Helvetica-Bold as the final object.
-	writeObject(boldFontObject, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>")
 
 	xrefOffset := buffer.Len()
-	totalObjects := boldFontObject
+	totalObjects := 4 + len(pages)*2
 	fmt.Fprintf(&buffer, "xref\n0 %d\n0000000000 65535 f \n", totalObjects+1)
 	for i := 0; i < totalObjects; i++ {
 		fmt.Fprintf(&buffer, "%010d 00000 n \n", offsets[i])

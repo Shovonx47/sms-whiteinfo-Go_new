@@ -1,8 +1,13 @@
 package billing
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"testing"
+	"time"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 func TestEffectiveOperatorRatesStrictPlanAndLegacyFallback(t *testing.T) {
@@ -72,5 +77,95 @@ func TestEffectiveOperatorRatesStrictPlanAndLegacyFallback(t *testing.T) {
 	}
 	if legacyRates[1].MaskingRate == nil || *legacyRates[1].MaskingRate != 0.50 || legacyRates[1].RateSource != "default" {
 		t.Fatalf("expected Grameenphone default masking=0.50, got %+v", legacyRates[1])
+	}
+}
+
+func TestForUserActiveTariffPlanQueryParity(t *testing.T) {
+	db, err := sql.Open("mysql", "root:@tcp(127.0.0.1:3306)/sms_panel_scratch?parseTime=true")
+	if err != nil {
+		t.Skip("Scratch DB not available")
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		t.Skip("Scratch DB not pingable")
+	}
+
+	ctx := context.Background()
+	now := time.Now().UnixNano()
+	uRes, err := db.ExecContext(ctx, `
+		INSERT INTO users (name, email, phone, password, balance, type, status, created_at, updated_at)
+		VALUES ('Tariff Parity User', ?, ?, 'hash', 100.00, 'customer', 'approved', NOW(), NOW())
+	`, fmt.Sprintf("tariff_%d@test.local", now), fmt.Sprintf("+88019%08d", now%100000000))
+	if err != nil {
+		t.Fatalf("failed creating user: %v", err)
+	}
+	userID, _ := uRes.LastInsertId()
+
+	var opID int64
+	if err := db.QueryRowContext(ctx, "SELECT id FROM operators WHERE is_active = 1 LIMIT 1").Scan(&opID); err != nil {
+		t.Fatalf("expected at least 1 active operator in scratch DB: %v", err)
+	}
+
+	slugPrefix := fmt.Sprintf("parity-%d", now)
+	pSup, err := db.ExecContext(ctx, "INSERT INTO tariff_plans (name, slug, type, status, currency, created_at, updated_at) VALUES ('Superseded Plan', ?, 'standard', 'active', 'BDT', NOW(), NOW())", slugPrefix+"-sup")
+	if err != nil {
+		t.Fatalf("insert plan sup: %v", err)
+	}
+	pSupID, _ := pSup.LastInsertId()
+
+	pDraft, err := db.ExecContext(ctx, "INSERT INTO tariff_plans (name, slug, type, status, currency, created_at, updated_at) VALUES ('Draft Plan', ?, 'standard', 'draft', 'BDT', NOW(), NOW())", slugPrefix+"-draft")
+	if err != nil {
+		t.Fatalf("insert plan draft: %v", err)
+	}
+	pDraftID, _ := pDraft.LastInsertId()
+
+	pAct, err := db.ExecContext(ctx, "INSERT INTO tariff_plans (name, slug, type, status, currency, created_at, updated_at) VALUES ('Active Parity Plan', ?, 'standard', 'active', 'BDT', NOW(), NOW())", slugPrefix+"-act")
+	if err != nil {
+		t.Fatalf("insert plan act: %v", err)
+	}
+	pActID, _ := pAct.LastInsertId()
+
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM tariff_plan_assignments WHERE user_id = ?", userID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM tariff_rates WHERE tariff_plan_id IN (?, ?, ?)", pSupID, pDraftID, pActID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM tariff_plans WHERE id IN (?, ?, ?)", pSupID, pDraftID, pActID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM users WHERE id = ?", userID)
+	}()
+
+	_, _ = db.ExecContext(ctx, "INSERT INTO tariff_rates (tariff_plan_id, operator_id, masking_price, non_masking_price, created_at, updated_at) VALUES (?, ?, 0.9900, 0.8800, NOW(), NOW())", pSupID, opID)
+	_, _ = db.ExecContext(ctx, "INSERT INTO tariff_rates (tariff_plan_id, operator_id, masking_price, non_masking_price, created_at, updated_at) VALUES (?, ?, 0.7700, 0.6600, NOW(), NOW())", pDraftID, opID)
+	_, _ = db.ExecContext(ctx, "INSERT INTO tariff_rates (tariff_plan_id, operator_id, masking_price, non_masking_price, created_at, updated_at) VALUES (?, ?, 0.5100, 0.2400, NOW(), NOW())", pActID, opID)
+
+	// Assign superseded today, draft today, active effective tomorrow, and active effective yesterday
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO tariff_plan_assignments (user_id, tariff_plan_id, effective_from, status, created_at, updated_at)
+		VALUES
+			(?, ?, CURDATE(), 'superseded', NOW(), NOW()),
+			(?, ?, CURDATE(), 'active', NOW(), NOW()),
+			(?, ?, DATE_ADD(CURDATE(), INTERVAL 1 DAY), 'active', NOW(), NOW()),
+			(?, ?, DATE_SUB(CURDATE(), INTERVAL 1 DAY), 'active', NOW(), NOW())
+	`, userID, pSupID, userID, pDraftID, userID, pSupID, userID, pActID)
+	if err != nil {
+		t.Fatalf("insert assignments: %v", err)
+	}
+
+	resolver, err := ForUser(ctx, db, userID)
+	if err != nil {
+		t.Fatalf("ForUser failed: %v", err)
+	}
+	if resolver.PlanName() != "Active Parity Plan" {
+		t.Fatalf("expected active plan 'Active Parity Plan', got %q", resolver.PlanName())
+	}
+
+	rates := resolver.EffectiveOperatorRates()
+	var matched *ResolvedOperatorRate
+	for i := range rates {
+		if rates[i].Operator.ID == opID {
+			matched = &rates[i]
+			break
+		}
+	}
+	if matched == nil || matched.NonMaskingRate == nil || *matched.NonMaskingRate != 0.24 || matched.MaskingRate == nil || *matched.MaskingRate != 0.51 {
+		t.Fatalf("expected resolved rates 0.51 / 0.24, got %+v", matched)
 	}
 }

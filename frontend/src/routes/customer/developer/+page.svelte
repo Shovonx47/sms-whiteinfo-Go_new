@@ -19,6 +19,7 @@
 	// Create Modal
 	let createModalOpen = $state(false);
 	let tokenName = $state('');
+	let expiresDays = $state('30');
 	let submitting = $state(false);
 
 	// Display newly created token
@@ -26,6 +27,7 @@
 
 	// Revoke confirm
 	let revokeTarget = $state<ApiToken | null>(null);
+	let revokeName = $state('');
 	let revokeMenuOpen = $state<number | null>(null);
 
 	async function load() {
@@ -51,7 +53,8 @@
 		submitting = true;
 		try {
 			const res = await api.post<{ token: string; data: ApiToken }>('/api/v1/customer/tokens', {
-				name: tokenName
+				name: tokenName,
+				expires_days: Number(expiresDays)
 			});
 			newlyCreatedToken = res.token;
 			tokens = [res.data, ...tokens];
@@ -66,8 +69,13 @@
 	}
 
 	async function handleRevoke(token: ApiToken) {
+		if (revokeName !== token.name) {
+			toast.error('Name does not match', 'Type the exact token name to confirm deletion.');
+			return;
+		}
 		revokeMenuOpen = null;
 		revokeTarget = null;
+		revokeName = '';
 		try {
 			await api.delete(`/api/v1/customer/tokens/${token.id}`);
 			tokens = tokens.filter((t) => t.id !== token.id);
@@ -96,6 +104,18 @@
 	function formatDate(val: string | null) {
 		if (!val) return '—';
 		return new Date(val).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+	}
+
+	async function renameToken(token: ApiToken) {
+		const nextName = prompt('Rename token', token.name)?.trim();
+		if (!nextName || nextName === token.name) return;
+		try {
+			await api.put(`/api/v1/customer/tokens/${token.id}`, { name: nextName });
+			tokens = tokens.map((item) => item.id === token.id ? { ...item, name: nextName } : item);
+			toast.success('Token Renamed', 'The API token name has been updated.');
+		} catch (err) {
+			toast.error('Rename Failed', err instanceof Error ? err.message : 'Failed to rename token.');
+		}
 	}
 
 	function timeAgo(val: string | null) {
@@ -237,7 +257,14 @@
 									<div class="absolute right-0 z-50 mt-1 w-36 rounded-lg border border-gray-200 bg-white shadow-lg">
 										<button
 											type="button"
-											onclick={() => { revokeTarget = token; revokeMenuOpen = null; }}
+											onclick={() => { revokeMenuOpen = null; renameToken(token); }}
+											class="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 rounded-lg transition"
+										>
+											Edit
+										</button>
+										<button
+											type="button"
+											onclick={() => { revokeTarget = token; revokeName = ''; revokeMenuOpen = null; }}
 											class="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 rounded-lg transition"
 										>
 											<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -337,6 +364,18 @@
 								class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
 							/>
 						</div>
+						<div>
+							<label for="token-expiry" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-gray-700">Expiration Date</label>
+							<select id="token-expiry" bind:value={expiresDays} class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500">
+								<option value="1">1 Day</option>
+								<option value="7">7 Days</option>
+								<option value="30">1 Month</option>
+								<option value="90">3 Months</option>
+								<option value="180">6 Months</option>
+								<option value="365">1 Year</option>
+								<option value="0">Never</option>
+							</select>
+						</div>
 						<div class="flex justify-end gap-3 pt-1">
 							<button
 								type="button"
@@ -371,16 +410,18 @@
 		aria-modal="true"
 	>
 		<div class="w-full max-w-sm rounded-xl bg-white shadow-xl mx-4 p-6">
-			<h2 class="text-base font-semibold text-gray-900">Revoke Token?</h2>
-			<p class="mt-2 text-sm text-gray-600">Are you sure you want to revoke <strong class="text-gray-800">{revokeTarget.name}</strong>? This action cannot be undone.</p>
+			<h2 class="text-base font-semibold text-gray-900">Delete Token?</h2>
+			<p class="mt-2 text-sm text-gray-600">This permanently deletes <strong class="text-gray-800">{revokeTarget.name}</strong>. Type the token name to continue.</p>
+			<input type="text" bind:value={revokeName} placeholder={revokeTarget.name} class="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-red-500 focus:outline-none focus:ring-1 focus:ring-red-500" />
 			<div class="mt-5 flex justify-end gap-3">
-				<button type="button" onclick={() => revokeTarget = null} class="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Cancel</button>
+				<button type="button" onclick={() => { revokeTarget = null; revokeName = ''; }} class="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Cancel</button>
 				<button
 					type="button"
+					disabled={revokeName !== revokeTarget.name}
 					onclick={() => { const t = revokeTarget; if (t) handleRevoke(t); }}
-					class="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 transition"
+					class="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 transition disabled:opacity-50"
 				>
-					Revoke
+					Delete
 				</button>
 			</div>
 		</div>

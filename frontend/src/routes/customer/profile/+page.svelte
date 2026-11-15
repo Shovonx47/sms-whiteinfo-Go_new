@@ -2,6 +2,7 @@
 	import { auth } from '$lib/stores/auth.svelte.js';
 	import { api } from '$lib/api.js';
 	import { toast } from '$lib/stores/toast.svelte.js';
+	import { onMount } from 'svelte';
 
 	let name = $state(auth.user?.name ?? '');
 	let email = $state(auth.user?.email ?? '');
@@ -15,6 +16,100 @@
 
 	// Profile update
 	let updatingProfile = $state(false);
+
+	// Two-factor authentication
+	let twoFactorEnabled = $state(false);
+	let twoFactorPassword = $state('');
+	let twoFactorSecret = $state('');
+	let twoFactorQr = $state('');
+	let twoFactorCode = $state('');
+	let twoFactorRecoveryCodes = $state<string[]>([]);
+	let twoFactorBusy = $state(false);
+
+	// Email change verification
+	let newEmail = $state('');
+	let emailPassword = $state('');
+	let emailChangeBusy = $state(false);
+
+	async function requestEmailChange(e: SubmitEvent) {
+		e.preventDefault();
+		emailChangeBusy = true;
+		try {
+			const res = await api.post<{ message?: string }>('/api/v1/customer/profile/email', {
+				email: newEmail,
+				password: emailPassword
+			});
+			toast.success('Verification sent', res.message ?? 'Check your new inbox for the confirmation link.');
+			newEmail = '';
+			emailPassword = '';
+		} catch (err) {
+			toast.error('Email change failed', err instanceof Error ? err.message : 'Unable to start the email change.');
+		} finally {
+			emailChangeBusy = false;
+		}
+	}
+
+	async function loadTwoFactor() {
+		try {
+			const res = await api.get<{ data: { enabled: boolean } }>('/api/v1/customer/2fa');
+			twoFactorEnabled = res.data?.enabled ?? false;
+		} catch {
+			twoFactorEnabled = false;
+		}
+	}
+
+	async function startTwoFactorSetup() {
+		if (!twoFactorPassword) {
+			toast.error('Password required', 'Confirm your password to set up two-factor authentication.');
+			return;
+		}
+		twoFactorBusy = true;
+		try {
+			const res = await api.post<{ data: { secret: string; qr_data_uri: string } }>('/api/v1/customer/2fa/setup', { password: twoFactorPassword });
+			twoFactorSecret = res.data.secret;
+			twoFactorQr = res.data.qr_data_uri;
+			twoFactorPassword = '';
+		} catch (err) {
+			toast.error('Setup failed', err instanceof Error ? err.message : 'Unable to start 2FA setup.');
+		} finally {
+			twoFactorBusy = false;
+		}
+	}
+
+	async function confirmTwoFactor() {
+		twoFactorBusy = true;
+		try {
+			const res = await api.post<{ recovery_codes: string[] }>('/api/v1/customer/2fa/enable', { secret: twoFactorSecret, code: twoFactorCode });
+			twoFactorRecoveryCodes = res.recovery_codes ?? [];
+			twoFactorEnabled = true;
+			twoFactorSecret = '';
+			twoFactorQr = '';
+			twoFactorCode = '';
+			toast.success('Two-factor enabled', 'Store your recovery codes somewhere safe.');
+		} catch (err) {
+			toast.error('Invalid code', err instanceof Error ? err.message : 'Unable to enable two-factor authentication.');
+		} finally {
+			twoFactorBusy = false;
+		}
+	}
+
+	async function disableTwoFactor() {
+		twoFactorBusy = true;
+		try {
+			await api.post('/api/v1/customer/2fa/disable', { password: twoFactorPassword, code: twoFactorCode });
+			twoFactorEnabled = false;
+			twoFactorPassword = '';
+			twoFactorCode = '';
+			twoFactorRecoveryCodes = [];
+			toast.success('Two-factor disabled', 'Authenticator codes are no longer required.');
+		} catch (err) {
+			toast.error('Unable to disable', err instanceof Error ? err.message : 'Check your password and authenticator code.');
+		} finally {
+			twoFactorBusy = false;
+		}
+	}
+
+	onMount(loadTwoFactor);
 
 	async function handleUpdateProfile(e: SubmitEvent) {
 		e.preventDefault();
@@ -148,6 +243,25 @@
 		</form>
 	</div>
 
+	<!-- Change Email Card -->
+	<div class="rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+		<h2 class="text-sm font-bold text-gray-950 dark:text-white mb-1">Change Email Address</h2>
+		<p class="text-xs text-gray-500 dark:text-gray-400 mb-4">Your login email changes only after you confirm the link sent to the new address. Current email: <strong class="text-gray-800 dark:text-gray-200">{email}</strong></p>
+		<form onsubmit={requestEmailChange} class="grid gap-4 sm:grid-cols-2">
+			<div>
+				<label for="new-email" class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">New Email Address</label>
+				<input id="new-email" type="email" required bind:value={newEmail} class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100" />
+			</div>
+			<div>
+				<label for="email-password" class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">Current Password</label>
+				<input id="email-password" type="password" required bind:value={emailPassword} class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100" />
+			</div>
+			<div class="sm:col-span-2 flex justify-end">
+				<button type="submit" disabled={emailChangeBusy} class="rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-500 disabled:opacity-50">{emailChangeBusy ? 'Sending…' : 'Send Verification Link'}</button>
+			</div>
+		</form>
+	</div>
+
 	<!-- Change Password Card -->
 	<div class="rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
 		<h2 class="text-sm font-bold text-gray-950 dark:text-white mb-1">Security & Password</h2>
@@ -198,5 +312,53 @@
 				</button>
 			</div>
 		</form>
+	</div>
+
+	<!-- Two-Factor Authentication Card -->
+	<div class="rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+		<div class="flex items-start justify-between gap-4">
+			<div>
+				<h2 class="text-sm font-bold text-gray-950 dark:text-white mb-1">Two-Factor Authentication</h2>
+				<p class="text-xs text-gray-500 dark:text-gray-400">Protect your account with an authenticator app (Google Authenticator, Authy, 1Password).</p>
+			</div>
+			<span class="rounded-full px-2.5 py-1 text-[10px] font-bold uppercase {twoFactorEnabled ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-600'}">{twoFactorEnabled ? 'Enabled' : 'Disabled'}</span>
+		</div>
+
+		{#if twoFactorRecoveryCodes.length > 0}
+			<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+				<p class="text-xs font-semibold text-amber-800">Recovery codes (shown once)</p>
+				<div class="mt-2 grid grid-cols-2 gap-1 font-mono text-xs text-amber-900 sm:grid-cols-4">
+					{#each twoFactorRecoveryCodes as code}<span>{code}</span>{/each}
+				</div>
+			</div>
+		{/if}
+
+		{#if twoFactorQr}
+			<div class="mt-4 flex flex-col items-center gap-3 rounded-lg border border-gray-200 p-4 sm:flex-row dark:border-gray-700">
+				<img src={twoFactorQr} alt="Authenticator QR code" class="h-40 w-40" />
+				<div class="text-xs text-gray-600 dark:text-gray-300">
+					<p class="font-semibold text-gray-900 dark:text-white">Scan this QR code</p>
+					<p class="mt-1">Or enter this setup key manually:</p>
+					<code class="mt-1 block break-all rounded bg-gray-100 p-2 font-mono text-[11px] dark:bg-gray-800">{twoFactorSecret}</code>
+					<input type="text" bind:value={twoFactorCode} inputmode="numeric" maxlength="6" placeholder="6-digit code" class="mt-3 w-40 rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white" />
+					<button type="button" onclick={confirmTwoFactor} disabled={twoFactorBusy || twoFactorCode.length !== 6} class="mt-2 rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-500 disabled:opacity-50">Verify & Enable</button>
+				</div>
+			</div>
+		{:else}
+			<div class="mt-4 flex flex-col gap-2 sm:flex-row sm:items-end">
+				<div class="flex-1">
+					<label for="twofactor-password" class="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-gray-600 dark:text-gray-400">{twoFactorEnabled ? 'Password + authenticator code to disable' : 'Confirm your password'}</label>
+					<input id="twofactor-password" type="password" bind:value={twoFactorPassword} placeholder="Current password" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white" />
+					{#if twoFactorEnabled}
+						<input type="text" bind:value={twoFactorCode} inputmode="numeric" placeholder="Authenticator or recovery code" class="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-white" />
+					{/if}
+				</div>
+				{#if twoFactorEnabled}
+					<button type="button" onclick={disableTwoFactor} disabled={twoFactorBusy || !twoFactorPassword || !twoFactorCode} class="rounded-lg border border-rose-300 px-4 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">Disable 2FA</button>
+				{:else}
+					<button type="button" onclick={startTwoFactorSetup} disabled={twoFactorBusy || !twoFactorPassword} class="rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-500 disabled:opacity-50">Set up 2FA</button>
+				{/if}
+			</div>
+		{/if}
 	</div>
 </div>

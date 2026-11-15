@@ -329,7 +329,7 @@ func (p *SendWorkerPool) ProcessMessageByID(ctx context.Context, mid int64) erro
 	}
 
 	q := `
-		SELECT m.id, m.user_id, m.`+"`to`"+`, m.body, m.is_unicode, m.cost, m.gateway_id, m.sender_id,
+		SELECT m.id, m.user_id, m.` + "`to`" + `, m.body, m.is_unicode, m.cost, m.gateway_id, m.sender_id,
 		       s.sender_id, s.type, s.gateway_id,
 		       COALESCE(g.id, sg.id), COALESCE(g.driver, sg.driver), COALESCE(g.credentials, sg.credentials), COALESCE(g.requests_per_second, sg.requests_per_second, 10), COALESCE(g.is_enabled, sg.is_enabled, false)
 		FROM messages m

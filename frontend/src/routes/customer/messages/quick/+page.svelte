@@ -5,6 +5,7 @@
 	import { goto } from '$app/navigation';
 	import Modal from '$lib/components/Modal.svelte';
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
 
 	interface Sender {
 		id: number;
@@ -20,10 +21,10 @@
 	}
 
 	interface PricingRate {
-		operator_name: string;
-		masking_price: number;
-		non_masking_price: number;
-		effective_from?: string;
+		operator_name?: string;
+		name?: string;
+		masking_rate: number | null;
+		non_masking_rate: number | null;
 	}
 
 	let senders = $state<Sender[]>([]);
@@ -89,8 +90,8 @@
 		try {
 			const res = await api.get<{ data: PricingRate[] }>('/api/v1/customer/pricing');
 			if (res.data && res.data.length > 0) {
-				nonMaskingRates = res.data.map((r) => r.non_masking_price).filter((p) => p > 0);
-				maskingRates = res.data.map((r) => r.masking_price).filter((p) => p > 0);
+				nonMaskingRates = res.data.map((r) => r.non_masking_rate).filter((p): p is number => typeof p === 'number' && p > 0);
+				maskingRates = res.data.map((r) => r.masking_rate).filter((p): p is number => typeof p === 'number' && p > 0);
 			}
 		} catch {
 			// Fallbacks
@@ -102,6 +103,9 @@
 		loadRecentRecipients();
 		loadTemplates();
 		loadPricing();
+		if (page.url.searchParams.get('schedule') === '1') {
+			scheduleOpen = true;
+		}
 	});
 
 	function handleTemplateChange(e: Event) {
@@ -357,11 +361,11 @@
 				</div>
 				<div class="flex items-center gap-1.5">
 					<span class="font-medium text-gray-700 dark:text-gray-300">Non-masking:</span>
-					<span>{formatRates(nonMaskingRates, '৳0.25')}/SMS</span>
+					<span>{formatRates(nonMaskingRates, '—')}/SMS</span>
 				</div>
 				<div class="flex items-center gap-1.5">
 					<span class="font-medium text-gray-700 dark:text-gray-300">Masking:</span>
-					<span>{formatRates(maskingRates, '৳0.55')}/SMS</span>
+					<span>{formatRates(maskingRates, '—')}/SMS</span>
 				</div>
 			</div>
 

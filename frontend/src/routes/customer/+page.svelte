@@ -228,17 +228,6 @@
 			badgeColor: 'text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60'
 		},
 		{
-			title: 'SUCCESSFUL SMS',
-			value: formatInt(stats?.successful_today ?? 0),
-			description: `${formatInt(stats?.successful_all_time ?? 0)} total all-time (${formatInt(stats?.delivered_all_time ?? 0)} delivered)`,
-			icon: '/images/icons/success-rate.svg',
-			href: '/customer/messages?status=delivered,sent',
-			bgGradient: 'from-emerald-500/10 to-teal-500/5',
-			borderColor: 'hover:border-emerald-500/40',
-			iconGlow: 'bg-emerald-500/10 ring-emerald-500/20',
-			badgeColor: 'text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60'
-		},
-		{
 			title: 'MESSAGES TODAY',
 			value: formatInt(stats?.messages_today ?? 0),
 			description: `${formatInt(stats?.messages_all_time ?? 0)} total messages sent`,
@@ -320,6 +309,17 @@
 			badgeColor: 'text-indigo-700 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60'
 		},
 		{
+			title: 'GROUPS',
+			value: formatInt(stats?.groups_total ?? 0),
+			description: 'Contact groups',
+			icon: '/images/icons/contacts.svg',
+			href: '/customer/groups',
+			bgGradient: 'from-violet-500/10 to-purple-500/5',
+			borderColor: 'hover:border-violet-500/40',
+			iconGlow: 'bg-violet-500/10 ring-violet-500/20',
+			badgeColor: 'text-violet-700 dark:text-violet-400 bg-violet-50 dark:bg-violet-950/60'
+		},
+		{
 			title: 'TEMPLATES',
 			value: formatInt(stats?.templates_total ?? 0),
 			description: 'Message templates',
@@ -388,7 +388,7 @@
 			Dashboard
 		</h1>
 		<a
-			href="/customer/deposits"
+			href="/customer/deposits?deposit=1"
 			id="btn-top-up"
 			class="inline-flex items-center gap-2 rounded-lg border border-teal-600/80 bg-white px-3.5 py-2 text-sm font-semibold text-teal-700 shadow-2xs transition hover:bg-teal-50 dark:border-teal-500/60 dark:bg-gray-900 dark:text-teal-400 dark:hover:bg-teal-950/40"
 		>

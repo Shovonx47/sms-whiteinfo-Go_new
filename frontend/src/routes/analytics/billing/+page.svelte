@@ -25,6 +25,8 @@
 	let data = $state<BillingData | null>(null);
 	let loading = $state(true);
 	let range = $state('30d');
+	let customFrom = $state('');
+	let customTo = $state('');
 	let topUpOpen = $state(false);
 	let topUpAmount = $state('');
 	let toppingUp = $state(false);
@@ -57,18 +59,24 @@
 
 	const rangeOptions = [
 		{ value: 'today', label: 'Today' },
+		{ value: 'yesterday', label: 'Yesterday' },
+		{ value: 'this_week', label: 'This Week' },
 		{ value: '7d', label: 'Last 7 Days' },
 		{ value: '30d', label: 'Last 30 Days' },
-		{ value: '90d', label: 'Last 90 Days' },
 		{ value: 'this_month', label: 'This Month' },
-		{ value: 'last_month', label: 'Last Month' },
-		{ value: 'this_year', label: 'This Year' }
+		{ value: 'this_year', label: 'This Year' },
+		{ value: 'custom', label: 'Custom Range' }
 	];
 
 	async function load() {
 		loading = true;
 		try {
-			const res = await api.get<{ data: BillingData }>(`/api/v1/customer/analytics/billing?range=${range}`);
+			const params = new URLSearchParams({ range });
+			if (range === 'custom') {
+				params.set('from', customFrom);
+				params.set('to', customTo);
+			}
+			const res = await api.get<{ data: BillingData }>(`/api/v1/customer/analytics/billing?${params}`);
 			data = res.data;
 		} catch {
 			data = null;
@@ -211,6 +219,11 @@
 				<path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
 			</svg>
 		</div>
+		{#if range === 'custom'}
+			<input type="date" bind:value={customFrom} onchange={load} class="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs" />
+			<span class="text-xs text-gray-400">to</span>
+			<input type="date" bind:value={customTo} onchange={load} class="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs" />
+		{/if}
 	</div>
 
 	<!-- 4 Stat Cards -->

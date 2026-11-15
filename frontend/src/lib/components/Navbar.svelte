@@ -2,7 +2,8 @@
 	import { auth } from '$lib/stores/auth.svelte.js';
 	import { api } from '$lib/api.js';
 	import { goto } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
+	import { browser } from '$app/environment';
 
 	interface NotificationItem {
 		id: string;
@@ -27,6 +28,75 @@
 	let notifications = $state<NotificationItem[]>([]);
 	let unreadCount = $state(0);
 	let loadingNotifications = $state(false);
+
+	interface SearchItem { id: number; title: string; subtitle: string; url: string; }
+	interface SearchCategory { category: string; items: SearchItem[]; }
+	let searchOpen = $state(false);
+	let searchQuery = $state('');
+	let searchLoading = $state(false);
+	let searchCategories = $state<SearchCategory[]>([]);
+	let searchTimer: number | null = null;
+	let isImpersonating = $state(false);
+
+	function runSearch(value: string) {
+		searchQuery = value;
+		if (searchTimer) clearTimeout(searchTimer);
+		if (!value.trim()) {
+			searchCategories = [];
+			searchLoading = false;
+			return;
+		}
+		searchLoading = true;
+		searchTimer = window.setTimeout(async () => {
+			try {
+				const res = await api.get<{ categories: SearchCategory[] }>(`/api/v1/customer/global-search?q=${encodeURIComponent(value.trim())}`);
+				searchCategories = res.categories ?? [];
+			} catch {
+				searchCategories = [];
+			} finally {
+				searchLoading = false;
+			}
+		}, 250);
+	}
+
+	function openSearch() {
+		searchOpen = true;
+		searchQuery = '';
+		searchCategories = [];
+	}
+
+	function closeSearch() {
+		searchOpen = false;
+		if (searchTimer) clearTimeout(searchTimer);
+	}
+
+	function goToSearchResult(item: SearchItem) {
+		closeSearch();
+		goto(item.url);
+	}
+
+	function handleGlobalKeys(e: KeyboardEvent) {
+		if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+			e.preventDefault();
+			searchOpen ? closeSearch() : openSearch();
+		}
+		if (e.key === 'Escape' && searchOpen) {
+			closeSearch();
+		}
+	}
+
+	function leaveImpersonation() {
+		try {
+			const raw = sessionStorage.getItem('sms_impersonation');
+			const info = raw ? JSON.parse(raw) : null;
+			sessionStorage.removeItem('sms_impersonation');
+			sessionStorage.removeItem('sms_customer_session_token');
+			localStorage.removeItem('sms_customer_access_token');
+			window.location.assign(info?.returnTo || '/superman');
+		} catch {
+			window.location.assign('/superman');
+		}
+	}
 
 	async function loadNotifications() {
 		if (!auth.isLoggedIn) return;
@@ -73,8 +143,19 @@
 	onMount(() => {
 		loadNotifications();
 		const timer = setInterval(loadNotifications, 30000);
+		try {
+			isImpersonating = sessionStorage.getItem('sms_impersonation') !== null;
+		} catch {
+			isImpersonating = false;
+		}
+		if (browser) {
+			window.addEventListener('keydown', handleGlobalKeys);
+		}
 
-		return () => clearInterval(timer);
+		return () => {
+			clearInterval(timer);
+			if (browser) window.removeEventListener('keydown', handleGlobalKeys);
+		};
 	});
 
 	function formatBalance(balance: number): string {
@@ -148,11 +229,14 @@
 					<path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
 				</svg>
 			</div>
-			<input
-				type="text"
-				placeholder="Search"
-				class="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-9 pr-3 text-xs text-gray-800 placeholder-gray-400 focus:border-teal-500 focus:outline-hidden focus:ring-1 focus:ring-teal-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
-			/>
+			<button
+				type="button"
+				onclick={openSearch}
+				class="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-9 pr-16 text-left text-xs text-gray-400 focus:border-teal-500 focus:outline-hidden focus:ring-1 focus:ring-teal-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
+			>
+				Search
+			</button>
+			<kbd class="pointer-events-none absolute inset-y-0 right-2 my-auto flex h-5 items-center rounded border border-gray-200 bg-gray-50 px-1.5 text-[10px] font-medium text-gray-400 dark:border-gray-600 dark:bg-gray-700">Ctrl K</kbd>
 		</div>
 	</div>
 
@@ -227,16 +311,15 @@
 			{/if}
 		</div>
 
-		<!-- Apps Square -->
-		<button
-			type="button"
-			class="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition dark:hover:bg-gray-800"
-			title="Apps"
-		>
-			<svg class="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" />
-			</svg>
-		</button>
+		{#if isImpersonating}
+			<button
+				type="button"
+				onclick={leaveImpersonation}
+				class="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-rose-600 to-red-500 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:from-rose-700 hover:to-red-600"
+			>
+				Back to Admin
+			</button>
+		{/if}
 
 		<!-- Round User Initials Avatar with Green Online Dot -->
 		<div class="relative" data-user-menu>
@@ -301,3 +384,43 @@
 		</div>
 	</div>
 </header>
+
+{#if searchOpen}
+	<div class="fixed inset-0 z-[80] flex items-start justify-center bg-black/40 px-4 pt-24" onclick={(e) => { if (e.target === e.currentTarget) closeSearch(); }} onkeydown={(e) => { if (e.key === 'Escape') closeSearch(); }} role="dialog" tabindex="-1" aria-modal="true" aria-label="Global search">
+		<div class="w-full max-w-xl overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900">
+			<div class="flex items-center gap-2 border-b border-gray-100 px-4 dark:border-gray-800">
+				<svg class="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
+				<input
+					type="text"
+					bind:value={searchQuery}
+					oninput={(e) => runSearch((e.currentTarget as HTMLInputElement).value)}
+					placeholder="Search messages, contacts, templates, deposits, transactions…"
+					class="w-full border-0 bg-transparent py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none dark:text-gray-100"
+					autofocus
+				/>
+				<button type="button" onclick={closeSearch} class="text-xs text-gray-400 hover:text-gray-600">Esc</button>
+			</div>
+			<div class="max-h-96 overflow-y-auto p-2">
+				{#if searchLoading}
+					<p class="px-4 py-8 text-center text-xs text-gray-400">Searching…</p>
+				{:else if !searchQuery.trim()}
+					<p class="px-4 py-8 text-center text-xs text-gray-400">Type to search your account.</p>
+				{:else if searchCategories.length === 0}
+					<p class="px-4 py-8 text-center text-xs text-gray-400">No results found.</p>
+				{:else}
+					{#each searchCategories as group (group.category)}
+						<div class="mb-1">
+							<p class="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-400">{group.category}</p>
+							{#each group.items as item (group.category + '-' + item.id)}
+								<button type="button" onclick={() => goToSearchResult(item)} class="block w-full rounded-lg px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-800">
+									<p class="text-xs font-semibold text-gray-900 dark:text-gray-100">{item.title}</p>
+									<p class="truncate text-[11px] text-gray-500">{item.subtitle}</p>
+								</button>
+							{/each}
+						</div>
+					{/each}
+				{/if}
+			</div>
+		</div>
+	</div>
+{/if}

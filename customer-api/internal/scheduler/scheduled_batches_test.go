@@ -75,7 +75,7 @@ func TestScheduledBatchFlipRace(t *testing.T) {
 	}
 }
 
-func TestPurgeStale_WorkerEnabledGuard_And_RefundFlag(t *testing.T) {
+func TestPurgeStale_WorkerEnabledGuard_NoRefund(t *testing.T) {
 	db, err := sql.Open("mysql", "root:@tcp(127.0.0.1:3306)/sms_panel_scratch?parseTime=true")
 	if err != nil {
 		t.Skip("Scratch DB not available")
@@ -126,12 +126,10 @@ func TestPurgeStale_WorkerEnabledGuard_And_RefundFlag(t *testing.T) {
 		t.Fatalf("Item 7 guard failed: purge-stale ran when WORKER_ENABLED was false! Status is %s", s1)
 	}
 
-	// 2. WORKER_ENABLED=true with PURGE_STALE_REFUND=true
+	// 2. WORKER_ENABLED=true marks stale messages failed WITHOUT refunding balance (Reference parity).
 	_ = os.Setenv("WORKER_ENABLED", "true")
-	_ = os.Setenv("PURGE_STALE_REFUND", "true")
 	defer func() {
 		_ = os.Setenv("WORKER_ENABLED", "false")
-		_ = os.Setenv("PURGE_STALE_REFUND", "false")
 	}()
 
 	sched.runPurgeStale(ctx, 8)
@@ -142,11 +140,10 @@ func TestPurgeStale_WorkerEnabledGuard_And_RefundFlag(t *testing.T) {
 		t.Fatalf("Expected message to be marked 'failed', got '%s'", s2)
 	}
 
-	// Verify user received 2.00 refund (10.00 + 2.00 = 12.00)
+	// Verify user balance stays untouched (10.00, no refund per Reference PurgeStaleMessages)
 	var bal float64
 	_ = db.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = ?", userID).Scan(&bal)
-	if bal != 12.00 {
-		t.Errorf("Expected balance 12.00 after purge-stale refund, got %.2f", bal)
+	if bal != 10.00 {
+		t.Errorf("Expected balance 10.00 after stale-queue purge without refund, got %.2f", bal)
 	}
 }
-

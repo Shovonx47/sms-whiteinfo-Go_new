@@ -6,6 +6,7 @@
 	import { goto } from '$app/navigation';
 	import Modal from '$lib/components/Modal.svelte';
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
 
 	interface Sender {
 		id: number;
@@ -27,10 +28,10 @@
 	}
 
 	interface PricingRate {
-		operator_name: string;
-		masking_price: number;
-		non_masking_price: number;
-		effective_from?: string;
+		operator_name?: string;
+		name?: string;
+		masking_rate: number | null;
+		non_masking_rate: number | null;
 	}
 
 	type SourceType = 'manual' | 'group' | 'upload';
@@ -133,7 +134,9 @@
 		if (list.length > 0) {
 			return Math.max(...list);
 		}
-		return isMasking ? 0.55 : 0.25;
+		// No resolved rate means it is not safe to invent one; keep the estimate at zero
+		// and let the server perform the authoritative affordability check.
+		return 0;
 	});
 
 	// Recipient count estimation
@@ -215,8 +218,8 @@
 		try {
 			const res = await api.get<{ data: PricingRate[] }>('/api/v1/customer/pricing');
 			if (res.data && res.data.length > 0) {
-				nonMaskingRates = res.data.map((r) => r.non_masking_price).filter((p) => p > 0);
-				maskingRates = res.data.map((r) => r.masking_price).filter((p) => p > 0);
+				nonMaskingRates = res.data.map((r) => r.non_masking_rate).filter((p): p is number => typeof p === 'number' && p > 0);
+				maskingRates = res.data.map((r) => r.masking_rate).filter((p): p is number => typeof p === 'number' && p > 0);
 			}
 		} catch {
 			// Fallbacks used
@@ -239,6 +242,9 @@
 		loadRecentRecipients();
 		loadPricing();
 		loadBalance();
+		if (page.url.searchParams.get('schedule') === '1') {
+			scheduleOpen = true;
+		}
 	});
 
 	// Phone tags helpers
@@ -1018,11 +1024,11 @@
 				</div>
 				<div class="flex items-center gap-1.5">
 					<span class="font-medium text-gray-700 dark:text-gray-300">Non-masking:</span>
-					<span>{formatRates(nonMaskingRates, '৳0.25')}/SMS</span>
+					<span>{formatRates(nonMaskingRates, '—')}/SMS</span>
 				</div>
 				<div class="flex items-center gap-1.5">
 					<span class="font-medium text-gray-700 dark:text-gray-300">Masking:</span>
-					<span>{formatRates(maskingRates, '৳0.55')}/SMS</span>
+					<span>{formatRates(maskingRates, '—')}/SMS</span>
 				</div>
 			</div>
 

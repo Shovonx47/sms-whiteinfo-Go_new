@@ -1079,6 +1079,7 @@ func (server *Server) bulkDeleteTemplates(context fiber.Ctx) error {
 		"deleted": affected,
 	})
 }
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (server *Server) transactions(context fiber.Ctx) error {
@@ -1351,17 +1352,20 @@ func (server *Server) kycSubmit(context fiber.Ctx) error {
 	var frontNidPath, backNidPath, livePhotoPath, tradeLicensePath *string
 	stored := []string{}
 
-	saveFile := func(header *multipart.FileHeader, dir string, maxBytes int64) (*string, error) {
+	saveFileWithPDF := func(header *multipart.FileHeader, dir string, maxBytes int64, allowPDF bool) (*string, error) {
 		if header == nil {
 			return nil, nil
 		}
-		path, err := server.saveUploadedFile(header, dir, maxBytes, false)
+		path, err := server.saveUploadedFile(header, dir, maxBytes, allowPDF)
 		if err != nil {
 			return nil, err
 		}
 		stored = append(stored, path)
 
 		return &path, nil
+	}
+	saveFile := func(header *multipart.FileHeader, dir string, maxBytes int64) (*string, error) {
+		return saveFileWithPDF(header, dir, maxBytes, false)
 	}
 
 	if frontNidPath, err = saveFile(frontHeader, "ids", maxNIDImageBytes); err != nil {
@@ -1371,7 +1375,7 @@ func (server *Server) kycSubmit(context fiber.Ctx) error {
 		server.removeStoredFiles(stored...)
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Back NID: " + err.Error()})
 	}
-	if tradeLicensePath, err = saveFile(tradeHeader, "trade_licenses", maxTradeLicenseBytes); err != nil {
+	if tradeLicensePath, err = saveFileWithPDF(tradeHeader, "trade_licenses", maxTradeLicenseBytes, true); err != nil {
 		server.removeStoredFiles(stored...)
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Trade license: " + err.Error()})
 	}
@@ -1566,92 +1570,6 @@ func (server *Server) deleteIpWhitelist(context fiber.Ctx) error {
 // ─────────────────────────────────────────────────────────────────────────────
 // Pricing
 // ─────────────────────────────────────────────────────────────────────────────
-
-func (server *Server) pricing(context fiber.Ctx) error {
-	claims := customer(context)
-
-	var tariffPlanID *int64
-	_ = server.db.QueryRow("SELECT tariff_plan_id FROM tariff_plan_assignments WHERE user_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1", claims.UserID).Scan(&tariffPlanID)
-	if tariffPlanID == nil {
-		_ = server.db.QueryRow("SELECT tariff_plan_id FROM tariff_plan_assignments WHERE user_id = ? ORDER BY id DESC LIMIT 1", claims.UserID).Scan(&tariffPlanID)
-	}
-
-	var rows *sql.Rows
-	var err error
-
-	if tariffPlanID != nil {
-		rows, err = server.db.Query(`
-			SELECT o.id, o.name, COALESCE(c.name, 'Bangladesh') as country_name, o.codes,
-			       COALESCE(tr.masking_price, o.masking_price, 0.4500) as masking_rate,
-			       COALESCE(tr.non_masking_price, o.non_masking_price, 0.3500) as non_masking_rate
-			FROM operators o
-			LEFT JOIN countries c ON c.id = o.country_id
-			LEFT JOIN tariff_rates tr ON tr.operator_id = o.id AND tr.tariff_plan_id = ?
-			WHERE o.is_active = 1
-			ORDER BY o.name ASC
-		`, *tariffPlanID)
-	} else {
-		rows, err = server.db.Query(`
-			SELECT o.id, o.name, COALESCE(c.name, 'Bangladesh') as country_name, o.codes,
-			       COALESCE(o.masking_price, 0.4500) as masking_rate,
-			       COALESCE(o.non_masking_price, 0.3500) as non_masking_rate
-			FROM operators o
-			LEFT JOIN countries c ON c.id = o.country_id
-			WHERE o.is_active = 1
-			ORDER BY o.name ASC
-		`)
-	}
-
-	if err != nil {
-		return databaseError(context, err)
-	}
-	defer rows.Close()
-
-	items := []fiber.Map{}
-	for rows.Next() {
-		var id int64
-		var name, country string
-		var codesRaw []byte
-		var maskingRate, nonMaskingRate float64
-
-		if err := rows.Scan(&id, &name, &country, &codesRaw, &maskingRate, &nonMaskingRate); err != nil {
-			continue
-		}
-
-		var codes []string
-		if len(codesRaw) > 0 {
-			_ = json.Unmarshal(codesRaw, &codes)
-		}
-		if len(codes) == 0 {
-			switch strings.ToLower(name) {
-			case "grameenphone", "grameenphone (gp)", "gp":
-				codes = []string{"017", "013"}
-			case "robi", "robi axiata":
-				codes = []string{"018"}
-			case "banglalink":
-				codes = []string{"019", "014"}
-			case "teletalk":
-				codes = []string{"015"}
-			case "airtel":
-				codes = []string{"016"}
-			}
-		}
-
-		items = append(items, fiber.Map{
-			"id":                id,
-			"name":              name,
-			"operator_name":     name,
-			"country":           country,
-			"codes":             codes,
-			"masking_rate":      maskingRate,
-			"non_masking_rate":  nonMaskingRate,
-			"masking_price":     maskingRate,
-			"non_masking_price": nonMaskingRate,
-		})
-	}
-
-	return context.JSON(fiber.Map{"data": items})
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Developer API Tokens (access_tokens)
@@ -1873,7 +1791,9 @@ func (server *Server) analyticsMessaging(context fiber.Ctx) error {
 
 func (server *Server) analyticsBilling(context fiber.Ctx) error {
 	claims := customer(context)
-	from, to := resolveDateRange(context)
+	fromTime, toTime := resolveAnalyticsDateRange(context.Query("range", "30d"), context.Query("from"), context.Query("to"))
+	from := fromTime.Format("2006-01-02 15:04:05")
+	to := toTime.Format("2006-01-02 15:04:05")
 
 	var deposits, spent, pendingDeposits float64
 	var txCount int

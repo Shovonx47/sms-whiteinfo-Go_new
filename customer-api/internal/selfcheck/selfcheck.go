@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
-	_ "smswhiteinfo/customer-api/internal/pgcompat"
 	"github.com/joho/godotenv"
 	"smswhiteinfo/customer-api/internal/crypto"
+	_ "smswhiteinfo/customer-api/internal/pgcompat"
 )
 
 type result struct {

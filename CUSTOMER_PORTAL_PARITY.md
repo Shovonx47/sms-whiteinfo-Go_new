@@ -10,6 +10,8 @@
 
 Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
 
+> **Session note (2026-11-15):** The `Target Gaps` lists below are the Phase-0 discovery findings. Items marked `IMPLEMENTED` were addressed in code and covered by builds/tests, but **not live-verified** because no MySQL server or `mysqldump` is available on this workstation. See "Final verification log", "Could not verify" and "Open questions" at the end of this file for the exact evidence and remaining risk.
+
 ---
 
 ## Priority 0 — Database Schema & Core Query Compatibility
@@ -26,7 +28,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - `customer-api/internal/billing/operator_rate_resolver.go:100` & `resources.go:1574`: query non-existent `tpa.is_active = 1`.
   - `customer-api/internal/httpapi/resources.go` `pricing()` duplicates rate logic and omits `effective_from <= CURDATE()`, `tp.status = 'active'`, and `user_operator_rates` fallback.
   - `customer-api/internal/httpapi/auth.go:130`: queries non-existent `is_admin_created` instead of `created_by_admin`.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending SQL migration script / `DESCRIBE` verification + live `customer-api` billing/pricing/login/template tests against MySQL.
 
 ---
@@ -44,7 +46,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - `login/+page.svelte` & `auth.go`: verify full banned/rejected/pending status handling + 2FA challenge flow (`app_authentication_secret` / recovery codes).
   - `customer/profile/+page.svelte`: email input is disabled (missing email change verification flow) and missing 2FA (`AppAuthentication` QR setup/disable + recovery codes) section.
   - `/terms` SvelteKit route missing (linked in `register/+page.svelte`).
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending unit + live API + browser auth/2FA/profile/reset tests.
 
 ### 1.2 Registration, OTP Verification, Referral Slugs & Phone QR Capture
@@ -60,7 +62,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - `frontend/src/routes/phone-photo/[token]/+page.svelte` route is completely missing!
   - `frontend/src/routes/terms/+page.svelte` is missing.
   - Verify `register.go` assigns `tariff_plan_assignments.status = 'active'` (compatible with DB schema) and validates uniqueness, OTP tokens, and referral slug cleanly.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending live registration + QR session + `/phone-photo/[token]` upload + OTP + DB verification.
 
 ### 1.3 Account Status Gating & KYC Resubmission (`pending`, `under_review`, `rejected`, `banned`, `resubmit_required`)
@@ -75,7 +77,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - `customer-api/internal/httpapi/resources.go:1354-1402`: `kycSubmit` passes `allowPDF = false` to `saveUploadedFile` for `trade_license_file` (blocks PDF trade licenses!).
   - `frontend/src/routes/customer/kyc/+page.svelte:455`: `<input type="file" accept="image/*" ...>` omits `.pdf` on Trade License.
   - `kyc/+page.svelte:170`: always appends `nid_number` even if not requested in `kyc_resubmit_fields`; lacks Phone QR live-photo option on KYC page; check redirect gating in `account/+layout.svelte` / `customer/+layout.svelte` for all status combinations (`pending` vs `resubmit_required` vs `rejected` vs `banned` vs `approved`).
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending KYC upload tests (image + PDF + `resubmit_required` + `created_by_sp` flow + gating across statuses).
 
 ### 1.4 Developer External API Contract (`/api/v1/*`)
@@ -89,7 +91,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
 - **Target Gaps**:
   - `external_api.go:530-590`: JSON fallback bug when `sender_id` is omitted or explicitly sent in JSON/form (`sender_id` parsing).
   - Verify `external_api.go` against Reference `Api/V1/*Controllers` + `EnsureApiAccess` + `ProcessApiKey` for all endpoints, HTTP codes, error codes (`ApiResponseCode`), `ip_whitelist_audit_logs`, and `template_id` bypass.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending Go HTTP tests / live `curl` matrix covering valid/invalid API keys, `api_access=0`, IP blocked/allowed/CIDR, aliases, scheduling, `template_id` bypass, status query, balance.
 
 ### 1.5 Quick SMS (`/messaging/messages/quick` & `/customer/messages/quick`)
@@ -106,7 +108,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - Allows >1 recipient client-side AND `messages.go` Quick SMS handler must strictly reject >1 recipient.
   - Does not open schedule modal on `?schedule=1`.
   - Missing recent recipient phone suggestions & BTRC disclaimer/stats exact format.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending end-to-end Quick SMS send & schedule tests (1 phone allowed, 2 phones rejected, live pricing reflected, sync dispatch & redirect).
 
 ### 1.6 Bulk SMS (`/messaging/messages/smart`, `/messaging/messages/bulk`, `/customer/messages/bulk`)
@@ -129,7 +131,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - `frontend/src/routes/customer/messages/bulk/+page.svelte:29-34, 214-224`: `loadPricing()` reads `non_masking_price`/`masking_price` instead of `non_masking_rate`/`masking_rate` -> silent hardcoded fallback.
   - Does not open schedule modal when navigated with `?schedule=1`.
   - Verify upload/group/manual variable mapping, approval callout + approved-template bypass (`messageMatchesTemplate`), confirmation modal breakdown, sample file download, and `batches.template_id` persistence match Reference end-to-end.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending live Bulk SMS tests for Manual (plain & variable repeater), Group, Upload (CSV/XLSX mapping + preview), Approved vs Unapproved template bypass, `sms_auto_approved=0`, and Scheduled Bulk.
 
 ### 1.7 DLR Webhook Refund Bug & Customer Notifications
@@ -146,7 +148,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
 - **Target Gaps**:
   - `customer-api/internal/httpapi/webhooks.go:40-65`: `handleSmsWebhook` mistakenly calls `payment.CompleteDeposit` instead of `billing.RefundMessageFailed` on DLR failure!
   - Check `notifications.go` & `customer-api` triggers so customer batch completion/failure/template/KYC/deposit notifications match Filament database notification payload & format cleanly.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending Go tests for `handleSmsWebhook` DLR failure refund (`balance` + `transactions` credit + `messages.status = 'dlr_failed'`) & notification emission/UI bell tests.
 
 ---
@@ -168,7 +170,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - `Sidebar.svelte`: group ordering/labels/icons/`KYC Documents` placement/`api_access` gating on Developer group/Scheduled count badge/active route highlighting vs alias routes (`/customer/*` vs `/messaging/*`, `/audience/*`, `/billing/*`, `/developer/*`, `/analytics/*`).
   - `Navbar.svelte`: dead Apps waffle button, Global Search Cmd+K modal (`CustomerGlobalSearchProvider`), `Back to Admin` button visibility, custom user menu status/balance/role card parity.
   - Developer routes mismatch (`/customer/ip-whitelist` vs `/developer/ip-whitelists`, `/developer/+page.svelte` vs `/developer/access-tokens`).
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending sidebar + navbar DOM/browser inspection across `api_access=0`, `api_access=1`, impersonation, dark mode, and global search queries.
 
 ### 2.2 Global Search (`Cmd+K` / Topbar Search)
@@ -176,7 +178,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - Instant matching across: Navigation Menu Items (with group name & URL), `Messages` (`to`, `body` -> `"SMS to {to}"` + Sender/Status/Date), `Contacts` (`name`, `phone` -> `"{name} ({phone})"` + Phone/Group), `Templates` (`name`, `body` -> body preview), `Deposits` (`transaction_id`, `amount`, `payment_method` -> `"Deposit: ৳..."`), `Transactions` (`id`, `description` -> `"Transaction #id"`), `Scheduled Messages` (`body` -> `"Scheduled: ..."`). Note Campaigns omitted per Reference/locked decision.
 - **Target Gaps**:
   - `developer.go:675+` implements `/api/v1/customer/search`, but `Navbar.svelte` needs wired `Cmd+K` / topbar global search dropdown modal rendering categorized results & navigating cleanly.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending API search test + frontend Cmd+K navigation test.
 
 ### 2.3 Dashboard (`/customer` / `/`)
@@ -194,7 +196,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - Row 3 — `Upcoming Scheduled SMS` table (15s poll, limit 5, `View All Scheduled` button, columns: `Sender ID`, `Recipient`, `Recipients`, `Message Content`, `Scheduled For` + relative diff, `Status`; empty state `"No upcoming scheduled messages"` / `"You do not have any scheduled messages in queue."`).
 - **Target Gaps**:
   - Verify `customer/+page.svelte` has all 9 stat cards (3×3 grid), `Top Up` modal action + reseller check, both Recent tables with exact columns/empty states/links & polling.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending live dashboard API + UI verification.
 
 ### 2.4 My Live Queue (`/messaging/live-queue` & `/customer/live-queue`)
@@ -205,7 +207,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - Live Message Stream: 3s poll with Pause/Resume button, View Mode toggle (`stream` vs `table`), Limit selector (`10`–`100`, default `30`), Status chips (`All` / `Pending` / `Sending` / `Dispatched`), Type chips (`All` / `Quick` / `Bulk`), Search (`to` / `body`). Default query shows `pending`/`sending` OR completed in last 10s.
 - **Target Gaps**:
   - Verify `live-queue/+page.svelte` & `messages.go` Live Queue endpoint match Reference KPI cards, Active Bulk Batches card, filters, stream/table mode, and 10s recent window.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending live-queue polling + filter + view toggle tests.
 
 ### 2.5 Sender ID List (`/messaging/senders` & `/customer/senders`)
@@ -214,7 +216,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - Columns: `Sender ID` (searchable), `Type` (`badge`: Masking / Non-Masking per `SenderType`).
 - **Target Gaps**:
   - Verify `customer/senders/+page.svelte` & `resources.go` `senders()` badge labels, search, empty state, and `sender_user` scoping.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending API + UI table check.
 
 ### 2.6 Bulk SMS Templates (`/messaging/templates` & `/customer/templates`)
@@ -228,7 +230,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
 - **Target Gaps**:
   - `sms_panel.templates` missing `approval`, `approved_by`, `approved_at`, `rejection_reason` columns -> blocking SQL queries in `resources.go`!
   - `frontend/src/routes/customer/templates/+page.svelte:378-396`: Pagination footer lacks Prev/Next page buttons! Also verify BTRC notice, Approval status filter, lock-when-approved UI guard, `{variable}` auto-detection, and View Infolist match Reference.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending DB schema fix + CRUD/lock/approval/pagination tests.
 
 ### 2.7 Scheduled Messages (`/messaging/scheduled-messages` & `/customer/scheduled-messages`)
@@ -240,7 +242,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - Actions: `Edit` (modal: `Scheduled Date & Time` min now, `Sender ID`, `Recipient Phone Numbers` editable when manual, `Message Content`; toast `"Scheduled Message Updated"`), `Pause` (when `scheduled`, confirmation modal -> `"Scheduled Message Paused"`), `Resume` (when `paused`, confirmation modal -> `"Schedule Resumed"`), `Delete` (confirmation modal -> `"Scheduled Message Deleted"`), Bulk Delete.
 - **Target Gaps**:
   - Verify `scheduled-messages/+page.svelte` links (`New` Quick/Bulk -> `?schedule=1` auto-opening modal), tabs/badges, Edit recipients/time, Pause/Resume/Delete, and 5s polling match Reference.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending schedule create/edit/pause/resume/delete tests & UI tab verification.
 
 ### 2.8 Sent Message Logs / Batches & Batch View (`/messaging/batches`, `/customer/batches`, `/customer/batches/[id]`)
@@ -249,7 +251,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - **Batch Detail (`/batches/{id}`)**: `BatchInfolist` (`Message` section: Template/body, Recipient Phone Numbers, Status, Source, Sender ID; `Message Statistics`: Pending, Sent, Delivered, Failed counts; `Import Statistics`: Total, Valid, Invalid + **"Download invalid list"** button if `failed_report_path` & `invalid_count > 0`, Progress %, Start/Completion/Created timestamps) + `MessagesRelationManager` table of messages in that batch.
 - **Target Gaps**:
   - `customer/batches/+page.svelte` vs `messages.go` `batches()`: Verify whether `Sent Message Logs` (`batches`) shows batch-level rows vs Reference `ListBatches` message-level logs (or check what Target currently implements and align!), `next_balance` & 4-decimal cost formatting, sender filter parameter mismatch (`sender_id` numeric ID vs string in `batches/+page.svelte`), export modal, and `Download invalid list` route/handler.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending Sent Message Logs + Batch Detail + invalid-list download + CSV/PDF export verification.
 
 ### 2.9 Sent Message Details & View Message (`/messaging/messages`, `/customer/messages`, `/customer/messages/[id]`)
@@ -280,7 +282,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - View Action (`MessageInfolist`): modal/page showing `UID`, `Sender`, `Recipient`, `Status`, `Cost`, `Parts`, `Sent At`, `Failed Reason`, `Body`, `Created At`, `Updated At`.
 - **Target Gaps**:
   - `customer/messages/+page.svelte` only has 12 columns vs Reference 19 columns, lacks View Message Infolist modal/page & `dlr_failed` status option parity, and `export.ts:235` PDF footer says `White Info SMS Admin Platform` instead of `Sendora SMS Platform` (`messages-report.blade.php:118`).
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending API payload check + all 19 columns + filters + CSV/PDF export + View Infolist check.
 
 ### 2.10 Audience — Groups & Contacts (`/audience/groups`, `/audience/contacts`, `/customer/groups`, `/customer/contacts`)
@@ -289,7 +291,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - `ContactResource` (`navigationSort = 2`): Columns: `Name` (searchable, sortable), `Phone` (searchable, sortable), `Created At`. Header actions: `New contact`, `Export Contacts` (CSV/XLSX). Validation: BD phone regex `^(?:\+?88)?0?1[3-9]\d{8}$` + unique per user excluding soft-deleted (`deleted_at IS NULL`). View/Edit shows `GroupsRelationManager` (`Name`, `Contacts`, `Created At` linking to Group).
 - **Target Gaps**:
   - Verify `contacts` CRUD/export/regex/unique validation, `groups` `contacts_count`, Group `Add Phone Numbers` bulk paste & file import, Attach/Detach contacts, View/Edit relation parity.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending Contact & Group CRUD, BD regex, bulk paste, file import, attach/detach, and export tests.
 
 ### 2.11 Billing — Payment History, Transactional Report & Pricing Reports
@@ -300,7 +302,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
 - **Target Gaps**:
   - `pricing()` backend bug (`resources.go:1574` queries `is_active` instead of delegating to `OperatorRateResolver` with `status = 'active'`).
   - Verify Deposit View Infolist, Transaction View Infolist, Reseller balance check on Top Up, and PipraPay callback flow.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending Deposit/PipraPay/Transaction/Pricing API + UI verification.
 
 ### 2.12 Analytics — Messaging & Billing (`/analytics/messaging`, `/analytics/billing`)
@@ -316,7 +318,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - `customer/analytics/+page.svelte` only has 3 presets (`Today`, `Last 7 Days`, `Last 30 Days`) — missing `Yesterday`, `This Week`, `This Month`, `This Year`, `Custom Range` + CSV/PDF export modal matching Reference columns!
   - `analytics/billing/+page.svelte` needs date preset parity + dark mode classes + Top Up button parity.
   - Check `billing_analytics.go` SQL accuracy for all 7/4 KPIs & chart series.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending analytics endpoint responses across presets/custom range + UI chart/KPI/export verification.
 
 ### 2.13 Developer — Access Tokens & IP Whitelists (`/developer/access-tokens`, `/developer/ip-whitelists`)
@@ -327,7 +329,7 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
 - **Target Gaps**:
   - `resources.go` vs `developer.go`: route overlap / missing token expiry options & rename/confirm-name-to-delete; `resources.go` `ipWhitelist` lacks public-IP/CIDR validation, edit action (reset to pending on IP change), and `ip_whitelist_audit_logs` writes (whereas `developer.go` may differ — unify frontend to the complete `developer.go` + enforce all Reference validations & audit logs!).
   - Route mismatch: `/customer/ip-whitelist` vs `/developer/ip-whitelists`, `/developer` vs `/developer/access-tokens`.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending AccessToken lifecycle (create with expiry + one-time modal + rename + exact-name delete) & IPWhitelist validation (reject `192.168.1.1`/`10.0.0.1`/`127.0.0.1`/`100.64.1.1`/`8.8.8.0/8`, allow `203.0.113.10`/`198.51.100.0/24`) + `ip_whitelist_audit_logs` DB check.
 
 ### 2.14 Exports & Reports Branding (`export.ts` + CSV/PDF parity)
@@ -335,5 +337,57 @@ Status Legend: `NOT STARTED` | `IN PROGRESS` | `IMPLEMENTED` | `VERIFIED`
   - Report PDF footer says `Generated by Sendora SMS Platform` (`messages-report.blade.php:118`), not Admin branding. Date format, currency `BDT`, and column sets match Reference CSV/PDF exporters.
 - **Target Gaps**:
   - `frontend/src/lib/utils/export.ts:235`: PDF footer says `White Info SMS Admin Platform`.
-- **Status**: `NOT STARTED`
+- **Status**: `IMPLEMENTED`
 - **How Verified**: Pending CSV & PDF export inspection.
+
+---
+
+## Final verification log (2026-11-15)
+
+### Commands actually run and results
+- `cd customer-api && gofmt -w internal/httpapi/*.go && go build ./... && go test ./...` — **pass** (all packages; database-backed tests skip when the scratch DB is unreachable).
+- `cd superman-api && go build ./... && go test ./...` — **pass**.
+- `cd sp-api && go build ./... && go test ./...` — **pass**.
+- `cd frontend && npm run check` — **pass, 0 errors** (133 accessibility/style warnings, all pre-existing or cosmetic).
+- `cd frontend && npm run build` — **pass**, static site written to `build/`.
+- Focused tests added/updated: `TestHOTPCodesMatchRFC6238`, `TestValidateTOTPWindow`, `TestRecoveryCodesAreHashedAndSingleUse`, `TestFilamentEncryptedSecretCompatibility`, `TestPHPRecoveryCodeSerialization`, PDF xref/pagination tests, DLR refund + duplicate callback webhook tests.
+
+### Implemented or corrected in this pass
+1. **2FA (Filament AppAuthentication)**: login challenge for TOTP/recovery code, `/2fa` status, encrypted QR setup, encrypted secret storage, bcrypt-hashed recovery codes stored as Laravel `encrypted:array`, single-use recovery consumption, disable with password + code, profile UI, login UI. Reads legacy Filament-encrypted values using `APP_KEY`.
+2. **Email change verification**: password-confirmed request, one-hour single-use token, duplicate-email checks, verification page, atomic email swap + `email_verified_at`, Laravel-compatible API messages.
+3. **Developer API documentation**: `/docs` page and API Documentation item in the gated Developer sidebar group.
+4. **Messages list**: all 19 reference columns except `API User` (new schema has no request-payload username source; see Open questions), plus the detail modal and status filters.
+5. **Sent Message Logs (batches)**: next balance, SMS count, status, failure reason and event date added; cost now 4 decimals; batch detail invalid-list download already present.
+6. **Templates**: Prev/Next pagination controls added; approval filter, locking and creation flow retained.
+7. **Dashboard**: restored the reference 9-card set (Current Balance, Messages Today, Scheduled SMS, Cost Today, Success Rate, Failed Today, Total Contacts, Groups, Templates); Top Up deep-links to the deposit modal.
+8. **PDF exports**: corrected object/xref/font layout so generated PDFs open; footer now `Generated by Sendora SMS Platform`.
+9. **Analytics ranges**: all reference presets plus custom from/to, backend range filtering for messaging and billing.
+10. **Quick/Bulk SMS**: exact pricing keys (`masking_rate`/`non_masking_rate`), no hardcoded fallback, single-recipient Quick enforcement, `?schedule=1` modal opening.
+11. **Registration phone photo**: real QR session, polling, expiry countdown and live-photo fill; capture page is served by the Go backend at `/phone-photo/{token}`.
+12. **KYC**: Trade License accepts image or PDF; PDF streaming/download path retained.
+13. **DLR refunds**: DLR failure now calls `billing.RefundMessageFailed` exactly once; duplicate callbacks are idempotent.
+14. **Developer tokens**: expiry presets, rename, exact-name delete confirmation.
+15. **Chrome/navigation**: global search Cmd/Ctrl+K, Back to Admin, notification bell unchanged, Developer and KYC sidebar placement, label and route alignment.
+16. **Schema parity migration**: `database/migrations/2026_10_25_customer_portal_schema_parity.sql` adds email logs, settings, template approval, batch template, SP KYC, MFA and email-change schema. It normalises MFA columns to LONGTEXT because Filament stores encrypted values.
+17. **Terms**: `/terms` reproduces the reference `Comming soon...` response.
+18. **Rate resolution**: `OperatorRateResolver` uses `status`, `effective_from` and active tariff plans.
+
+### Could not verify (specific reasons)
+- **Live API/database behavior**: this workstation has no running MySQL/MariaDB (`mysqldump` absent, scratch DB not pingable). Every DB-backed Go test skips. Therefore no registration, login, 2FA enrollment, email delivery, send, refund, KYC, analytics or export flow was exercised against a real database.
+- **Browser walkthrough**: not performed for the same reason (portal requires a live API and DB). Build and Svelte checks pass, but layout/scroll/pagination appearance was not visually inspected.
+- **SMTP email delivery** for password reset, email change and OTP: mailer is configured through environment variables; no SMTP credentials were available to send a real message.
+- **`API User` message column**: the reference derives it from gateway request payload `username`; the new message schema does not store that value, so the column is deliberately not fabricated.
+- **Migration execution**: the SQL migration was written and reviewed but not applied to a real MariaDB instance here.
+
+### Open questions
+1. Should the old and new portals run against the same database concurrently during cutover? The 2FA code now writes Filament-compatible encrypted values and hashed recovery codes, but running both simultaneously would still race on `last_login_at` and email-change tokens.
+2. Is the production `users.app_authentication_recovery_codes` column already LONGTEXT? The reference base migration declares JSON while Filament's encrypted cast writes a string; the parity migration normalises it, but the production column type should be confirmed before applying.
+3. Should `API User` be reconstructed by adding a request-username column, or is the reference column effectively always empty for this deployment?
+4. The reference `/docs` is a separately generated Scribe site. The new `/docs` reproduces the endpoint reference and examples; confirm whether pixel-identical Scribe output is required.
+5. Backups still require `mysqldump` on the host; confirm the production binary path before relying on the admin backup page.
+
+### Remaining production risks
+- Any SQL typo in `database/migrations/2026_10_25_customer_portal_schema_parity.sql` cannot surface until it runs on MariaDB; apply to staging first and take a backup.
+- Existing 2FA users must have `APP_KEY` identical to the Laravel application, otherwise encrypted secrets cannot be decrypted.
+- The static frontend build must be pointed at the Go API base URL; no live proxy was validated in this environment.
+- Automated tests cover token/TOTP/refund/PDF/analytics helpers, not SQL execution or HTTP integration against MySQL.

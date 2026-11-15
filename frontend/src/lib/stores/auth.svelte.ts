@@ -94,10 +94,10 @@ function createAuthStore() {
 			}
 		},
 
-		async login(email: string, password: string, remember: boolean = true) {
+		async login(email: string, password: string, remember: boolean = true, twoFactorCode = '', recoveryCode = '') {
 			state.loading = true;
 			try {
-				const res = await api.post<{ data?: { token?: string; user?: User }; token?: string }>('/api/v1/customer/login', { email, password, remember });
+				const res = await api.post<{ data?: { token?: string; user?: User }; token?: string }>('/api/v1/customer/login', { email, password, remember, two_factor_code: twoFactorCode, recovery_code: recoveryCode });
 				const token = res?.data?.token ?? res?.token;
 				if (token) {
 					api.setToken(token, remember);
@@ -109,7 +109,11 @@ function createAuthStore() {
 				api.clearToken();
 				state.user = null;
 				if (e instanceof ApiError) {
-					return { success: false, message: (e.data.message as string) ?? 'Login failed' };
+					return {
+						success: false,
+						message: (e.data.message as string) ?? 'Login failed',
+						twoFactorRequired: e.data.two_factor_required === true
+					};
 				}
 				return { success: false, message: 'Network error. Please try again.' };
 			} finally {

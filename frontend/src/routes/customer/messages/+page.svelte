@@ -18,8 +18,11 @@
 		sms_type?: string;
 		channel?: string;
 		tariff_name?: string;
-		previous_balance?: number | null;
-		next_balance?: number | null;
+		previous_balance?: string | number | null;
+		next_balance?: string | number | null;
+		error_message?: string | null;
+		source_ip?: string;
+		request_id?: string;
 		submitted_at: string;
 		delivered_at: string | null;
 	}
@@ -202,42 +205,53 @@
 		});
 	}
 
+	function money(value: string | number | null | undefined): string {
+		if (value === null || value === undefined || value === '') return '—';
+		return Number(value).toFixed(2);
+	}
+
 	const columns = [
 		{
 			key: 'id',
-			label: 'ID',
-			class: 'w-20',
+			label: 'Message ID',
+			class: 'w-24 whitespace-nowrap',
 			render: (row: Message) => `MSG-${String(row.id).padStart(6, '0')}`
 		},
-		{ key: 'to', label: 'Recipient', class: 'font-mono' },
-		{ key: 'sender_id', label: 'Sender ID' },
+		{ key: 'to', label: 'Recipient', class: 'font-mono whitespace-nowrap' },
 		{
 			key: 'body',
-			label: 'Message',
-			class: 'max-w-[200px]',
-			render: (row: Message) => (row.body?.length > 60 ? row.body.slice(0, 60) + '…' : row.body)
+			label: 'Content',
+			class: 'max-w-[220px]',
+			render: (row: Message) => (row.body?.length > 50 ? row.body.slice(0, 50) + '…' : row.body)
 		},
-		{ key: 'parts', label: 'Parts' },
+		{ key: 'sender_id', label: 'Sender ID', render: (row: Message) => row.sender_id || '—' },
 		{ key: 'sms_type', label: 'SMS Type', render: (row: Message) => row.sms_type || '—' },
-		{ key: 'cost', label: 'Cost', money: true },
+		{ key: 'parts', label: 'SMS Count' },
+		{ key: 'cost', label: 'Cost (BDT)', money: true },
+		{ key: 'previous_balance', label: 'Previous Balance', render: (row: Message) => money(row.previous_balance) },
+		{ key: 'next_balance', label: 'Next Balance', render: (row: Message) => money(row.next_balance) },
 		{
 			key: 'status',
 			label: 'Status',
 			badge: true,
 			badgeClass: statusBadgeClass
 		},
+		{ key: 'error_message', label: 'Failure Reason', render: (row: Message) => row.error_message || '—' },
 		{ key: 'operator', label: 'Operator' },
 		{ key: 'channel', label: 'Channel', render: (row: Message) => row.channel || '—' },
 		{
 			key: 'submitted_at',
-			label: 'Submitted',
+			label: 'Submit Time',
 			render: (row: Message) => formatDate(row.submitted_at)
 		},
 		{
 			key: 'delivered_at',
-			label: 'Delivered',
+			label: 'Delivery Time',
 			render: (row: Message) => formatDate(row.delivered_at)
-		}
+		},
+		{ key: 'tariff_name', label: 'Tariff', render: (row: Message) => row.tariff_name || '—' },
+		{ key: 'source_ip', label: 'Source IP', render: (row: Message) => row.source_ip || '—' },
+		{ key: 'request_id', label: 'Request ID', render: (row: Message) => row.request_id || '—' }
 	];
 </script>
 
@@ -249,7 +263,7 @@
 <div class="space-y-4">
 	<div class="flex items-start justify-between gap-4">
 		<div>
-			<h2 class="text-lg font-semibold text-gray-950 dark:text-gray-100">SMS Logs</h2>
+			<h2 class="text-lg font-semibold text-gray-950 dark:text-gray-100">Sent Message Details</h2>
 			<p class="mt-0.5 text-sm text-gray-500">All outgoing messages and delivery reports.</p>
 		</div>
 		<div class="flex gap-2">

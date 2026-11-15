@@ -213,6 +213,7 @@ func (server *Server) App() *fiber.App {
 	api.Post("/register", server.register)
 	api.Post("/forgot-password", server.forgotPassword)
 	api.Post("/reset-password", server.resetPassword)
+	api.Post("/email-change/verify", server.verifyEmailChange)
 	api.Get("/register/plan/:slug", server.registerPlan)
 
 	// Signup verification codes (public: no account exists yet).
@@ -224,6 +225,7 @@ func (server *Server) App() *fiber.App {
 	protected.Post("/logout", server.logout)
 	protected.Get("/me", server.me)
 	protected.Put("/profile", server.updateProfile)
+	protected.Post("/profile/email", server.requestEmailChange)
 	protected.Put("/password", server.updatePassword)
 
 	// Dashboard
@@ -302,6 +304,11 @@ func (server *Server) App() *fiber.App {
 	protected.Post("/kyc", server.kycSubmit)
 
 	// Database notifications
+	protected.Get("/2fa", server.twoFactorStatus)
+	protected.Post("/2fa/setup", server.twoFactorSetup)
+	protected.Post("/2fa/enable", server.twoFactorEnable)
+	protected.Post("/2fa/disable", server.twoFactorDisable)
+
 	protected.Get("/notifications", server.notifications)
 	protected.Post("/notifications/read-all", server.markAllNotificationsRead)
 	protected.Post("/notifications/:id/read", server.markNotificationRead)

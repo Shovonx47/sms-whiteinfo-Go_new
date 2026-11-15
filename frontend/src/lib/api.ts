@@ -3,7 +3,8 @@
  * Uses Bearer token authentication from localStorage or sessionStorage.
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? '';
+export const API_BASE_URL = import.meta.env.VITE_API_URL ?? '';
+const BASE_URL = API_BASE_URL;
 
 const storageKey = 'sms_customer_access_token';
 const sessionStorageKey = 'sms_customer_session_token';

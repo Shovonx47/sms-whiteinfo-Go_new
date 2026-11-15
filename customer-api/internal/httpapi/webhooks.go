@@ -10,12 +10,11 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
+	"smswhiteinfo/customer-api/internal/billing"
 	"smswhiteinfo/customer-api/internal/payment"
 )
 
 func (server *Server) handleSmsWebhook(context fiber.Ctx) error {
-	gateway := context.Params("gateway")
-
 	// Process incoming DLR status if payload contains message ID and status
 	msgID := context.Query("Message_ID")
 	status := context.Query("Status")
@@ -48,10 +47,16 @@ func (server *Server) handleSmsWebhook(context fiber.Ctx) error {
 				WHERE gateway_message_id = ? AND status = 'sent'
 			`, status, msgID)
 		} else if strings.Contains(sUpper, "FAIL") || strings.Contains(sUpper, "REJECT") {
+			// Reference parity (PollMessageDeliveryJob::handleDeliveryFailed): a failed
+			// delivery marks the message failed and refunds its cost exactly once.
 			var mid int64
 			err := server.db.QueryRowContext(context.Context(), "SELECT id FROM messages WHERE gateway_message_id = ? AND status = 'sent'", msgID).Scan(&mid)
 			if err == nil && mid > 0 {
-				_, _ = payment.CompleteDeposit(context.Context(), server.db, gateway, "", false, nil)
+				reason := strings.TrimSpace(context.Query("Reason"))
+				if reason == "" {
+					reason = status
+				}
+				_, _ = billing.RefundMessageFailed(context.Context(), server.db, mid, "sent", reason)
 			}
 		}
 	}

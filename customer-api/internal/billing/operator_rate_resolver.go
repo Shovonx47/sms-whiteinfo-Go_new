@@ -90,14 +90,18 @@ func ForUser(ctx context.Context, db *sql.DB, userID int64) (*OperatorRateResolv
 		}
 	}
 
-	// 2. Check active tariff plan assignment
+	// 2. Check active tariff plan assignment matching Reference OperatorRateResolver
 	var planID int64
 	var planName string
 	err = db.QueryRowContext(ctx, `
 		SELECT tp.id, tp.name
 		FROM tariff_plan_assignments tpa
 		JOIN tariff_plans tp ON tp.id = tpa.tariff_plan_id
-		WHERE tpa.user_id = ? AND tpa.is_active = 1
+		WHERE tpa.user_id = ?
+		  AND tpa.status = 'active'
+		  AND tpa.effective_from <= CURDATE()
+		  AND tp.status = 'active'
+		ORDER BY tpa.effective_from DESC, tpa.id DESC
 		LIMIT 1
 	`, userID).Scan(&planID, &planName)
 

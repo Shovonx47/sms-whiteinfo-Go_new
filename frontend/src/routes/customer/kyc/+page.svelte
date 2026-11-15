@@ -452,7 +452,7 @@
 							<span class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">Trade License Document</span>
 							<input
 								type="file"
-								accept="image/*"
+								accept="image/*,.pdf,application/pdf"
 								onchange={(e) => handleFileChange(e, 'trade')}
 								class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-xs text-gray-700 shadow-xs file:mr-3 file:rounded-md file:border-0 file:bg-gray-100 file:px-3 file:py-1 file:text-xs file:font-semibold file:text-gray-700 hover:file:bg-gray-200 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:file:bg-gray-700 dark:file:text-gray-200 dark:hover:file:bg-gray-600"
 							/>
