@@ -190,5 +190,45 @@
 				<button type="submit" disabled={saving} class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">{saving ? 'Saving…' : 'Save Changes'}</button>
 			</div>
 		</form>
+		{/if}
+
+	{#if !tablePage && !settingsPage}
+		<!-- Generic Module Management View -->
+		<div class="space-y-4">
+			<div class="rounded-xl border border-gray-200 bg-white p-6 shadow-xs dark:border-gray-800 dark:bg-gray-900 space-y-6">
+				<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-gray-100 pb-4 dark:border-gray-800">
+					<div class="relative w-full max-w-xs">
+						<input
+							type="search"
+							bind:value={search}
+							placeholder={`Filter ${title.toLowerCase()}...`}
+							class="w-full rounded-lg border border-gray-200 bg-gray-50/70 py-1.5 pl-3 pr-3 text-xs outline-none focus:border-emerald-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+						/>
+					</div>
+					<div class="flex items-center gap-2">
+						<button
+							type="button"
+							onclick={() => window.location.reload()}
+							class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-xs hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
+						>
+							Refresh
+						</button>
+						<a
+							href="/superman"
+							class="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 transition"
+						>
+							Live Dashboard
+						</a>
+					</div>
+				</div>
+
+				<div class="flex flex-col items-center justify-center py-12 text-center">
+					<h3 class="text-sm font-semibold text-gray-900 dark:text-white">No records found</h3>
+					<p class="mt-1 max-w-md text-xs text-gray-500 dark:text-gray-400">
+						There is nothing recorded for {title} yet.
+					</p>
+				</div>
+			</div>
+		</div>
 	{/if}
 </div>

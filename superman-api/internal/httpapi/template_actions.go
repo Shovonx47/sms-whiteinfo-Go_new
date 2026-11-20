@@ -30,7 +30,7 @@ func (server *Server) approveTemplate(context fiber.Ctx) error {
 	result, err := server.db.Exec(`
 		UPDATE templates
 		SET approval = 'approved', approved_by = ?, approved_at = NOW(), rejection_reason = NULL, updated_at = NOW()
-		WHERE id = ? AND COALESCE(approval, 'approved') = 'pending' AND deleted_at IS NULL
+		WHERE id = ? AND COALESCE(approval, 'approved') IN ('pending', 'rejected') AND deleted_at IS NULL
 	`, admin.AdminID, id)
 	if err != nil {
 		return databaseError(context, err)

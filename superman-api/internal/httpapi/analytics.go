@@ -93,7 +93,7 @@ func (server *Server) loadActiveOperators() ([]operatorItem, error) {
 		SELECT o.id, o.name, o.codes, COALESCE(c.name, 'Bangladesh'), COALESCE(c.code, '880')
 		FROM operators o
 		LEFT JOIN countries c ON o.country_id = c.id
-		WHERE o.is_active = 1
+		WHERE o.is_active = TRUE
 	`)
 	if err != nil {
 		return nil, err
@@ -242,8 +242,8 @@ func (server *Server) analyticsCostProfit(c fiber.Ctx) error {
 		       COALESCE(SUM(m.operator_cost), 0) as op_cost,
 		       COALESCE(SUM(m.primary_dipping_cost), 0) as dip_cost,
 		       COALESCE(SUM(m.third_party_dipping_cost), 0) as third_dip_cost,
-		       COALESCE(g.has_third_party_dipping, 0) as has_3rd,
-		       COALESCE(g.dlr_support, 0) as dlr_sup,
+		       CASE WHEN COALESCE(g.has_third_party_dipping, FALSE) THEN 1 ELSE 0 END as has_3rd,
+		       CASE WHEN COALESCE(g.dlr_support, FALSE) THEN 1 ELSE 0 END as dlr_sup,
 		       SUM(CASE WHEN m.status = 'delivered' THEN 1 ELSE 0 END) as delivered_count
 		FROM messages m
 		LEFT JOIN gateways g ON m.gateway_id = g.id

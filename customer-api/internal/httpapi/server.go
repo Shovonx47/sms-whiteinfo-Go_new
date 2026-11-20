@@ -159,7 +159,12 @@ func (server *Server) App() *fiber.App {
 		return c.Next()
 	})
 
-	origins := []string{server.config.FrontendOrigin, "http://localhost:5173", "http://127.0.0.1:5173"}
+	origins := []string{"http://localhost:5173", "http://127.0.0.1:5173"}
+	for _, o := range strings.Split(server.config.FrontendOrigin, ",") {
+		if tr := strings.TrimSpace(o); tr != "" {
+			origins = append(origins, tr)
+		}
+	}
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     origins,
 		AllowHeaders:     []string{"Authorization", "Content-Type", "X-Requested-With", "Accept", "X-XSRF-TOKEN"},

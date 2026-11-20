@@ -47,10 +47,10 @@ func (server *Server) dashboard(context fiber.Ctx) error {
 	var pending, processing, quickQueue, bulkQueue int
 	err := server.db.QueryRow(`
 		SELECT
-			COALESCE(SUM(status = 'pending'), 0),
-			COALESCE(SUM(status = 'sending'), 0),
-			COALESCE(SUM(status IN ('pending', 'sending') AND batch_id IS NULL), 0),
-			COALESCE(SUM(status IN ('pending', 'sending') AND batch_id IS NOT NULL), 0)
+			COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'sending' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status IN ('pending', 'sending') AND batch_id IS NULL THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status IN ('pending', 'sending') AND batch_id IS NOT NULL THEN 1 ELSE 0 END), 0)
 		FROM messages
 	`).Scan(&pending, &processing, &quickQueue, &bulkQueue)
 	if err != nil {
@@ -60,11 +60,11 @@ func (server *Server) dashboard(context fiber.Ctx) error {
 	var recentSent, recentFailed, sentLastMinute int
 	err = server.db.QueryRow(`
 		SELECT
-			COALESCE(SUM(status IN ('sent', 'delivered')), 0),
-			COALESCE(SUM(status IN ('failed', 'dlr_failed')), 0),
-			COALESCE(SUM(updated_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE) AND status IN ('sent', 'delivered')), 0)
+			COALESCE(SUM(CASE WHEN status IN ('sent', 'delivered') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status IN ('failed', 'dlr_failed') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN updated_at >= NOW() - INTERVAL 1 MINUTE AND status IN ('sent', 'delivered') THEN 1 ELSE 0 END), 0)
 		FROM messages
-		WHERE updated_at >= DATE_SUB(NOW(), INTERVAL 15 MINUTE)
+		WHERE updated_at >= NOW() - INTERVAL 15 MINUTE
 	`).Scan(&recentSent, &recentFailed, &sentLastMinute)
 	if err != nil {
 		return databaseError(context, err)
@@ -113,9 +113,9 @@ func (server *Server) dashboardGateways() ([]dashboardGateway, error) {
 			g.name,
 			COALESCE(g.driver, 'default'),
 			g.is_enabled,
-			COALESCE(SUM(m.updated_at >= DATE_SUB(NOW(), INTERVAL 15 MINUTE) AND m.status IN ('sent', 'delivered')), 0),
-			COALESCE(SUM(m.updated_at >= DATE_SUB(NOW(), INTERVAL 15 MINUTE) AND m.status IN ('failed', 'dlr_failed')), 0),
-			COALESCE(SUM(m.updated_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE) AND m.status IN ('sent', 'delivered')), 0)
+			COALESCE(SUM(CASE WHEN m.updated_at >= NOW() - INTERVAL 15 MINUTE AND m.status IN ('sent', 'delivered') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN m.updated_at >= NOW() - INTERVAL 15 MINUTE AND m.status IN ('failed', 'dlr_failed') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN m.updated_at >= NOW() - INTERVAL 1 MINUTE AND m.status IN ('sent', 'delivered') THEN 1 ELSE 0 END), 0)
 		FROM gateways g
 		LEFT JOIN messages m ON m.gateway_id = g.id
 		GROUP BY g.id, g.name, g.driver, g.is_enabled

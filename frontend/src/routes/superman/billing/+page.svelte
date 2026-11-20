@@ -113,6 +113,19 @@
 	let recentDeposits = $state<DepositItem[]>([]);
 	let recentTransactions = $state<TransactionItem[]>([]);
 
+	// Recent Ledger Transactions pagination
+	let ledgerTransactions = $state<TransactionItem[]>([]);
+	let ledgerPage = $state(1);
+	let ledgerPerPage = $state(10);
+	let ledgerTotal = $state(0);
+	let ledgerLoading = $state(false);
+	let ledgerTotalPages = $derived(Math.max(1, Math.ceil(ledgerTotal / ledgerPerPage)));
+	let ledgerPageNumbers = $derived.by(() => {
+		const start = Math.max(1, Math.min(ledgerPage - 2, ledgerTotalPages - 4));
+		const end = Math.min(ledgerTotalPages, start + 4);
+		return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+	});
+
 	// Adjust Balance Modal
 	let showAdjustModal = $state(false);
 	let customersList = $state<CustomerOption[]>([]);
@@ -154,6 +167,29 @@
 			console.error('Failed to load billing dashboard:', err);
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function loadLedger(page = ledgerPage) {
+		ledgerLoading = true;
+		try {
+			const query = new URLSearchParams({
+				page: String(page),
+				per_page: String(ledgerPerPage)
+			});
+
+			const res = await supermanApi.get<{
+				data: TransactionItem[];
+				meta: { page: number; per_page: number; total: number };
+			}>(`/api/v1/superman/billing/reports?${query.toString()}`);
+
+			ledgerTransactions = res.data || [];
+			ledgerTotal = res.meta?.total || 0;
+			ledgerPage = res.meta?.page || page;
+		} catch (err: unknown) {
+			console.error('Failed to load ledger transactions:', err);
+		} finally {
+			ledgerLoading = false;
 		}
 	}
 
@@ -221,6 +257,7 @@
 
 	onMount(() => {
 		loadDashboard();
+		void loadLedger(1);
 	});
 
 	function formatCurrency(val: number): string {
@@ -843,8 +880,8 @@
 					<ExportDropdown
 						title="Recent Transactions Ledger"
 						columns={exportTransactionColumns}
-						getData={() => recentTransactions}
-						disabled={recentTransactions.length === 0}
+						getData={() => ledgerTransactions}
+						disabled={ledgerTransactions.length === 0}
 					/>
 					<a href="/superman/billing/transactions" class="text-xs font-semibold text-emerald-600 hover:underline dark:text-emerald-400">
 						View All →
@@ -867,7 +904,7 @@
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-gray-100 dark:divide-gray-800">
-						{#each recentTransactions as t}
+						{#each ledgerTransactions as t}
 							<tr class="hover:bg-gray-50/50 dark:hover:bg-gray-800/40">
 								<td class="py-2.5 font-mono text-[10px] text-gray-400 whitespace-nowrap">
 									{new Date(t.created_at).toLocaleDateString([], { day: '2-digit', month: 'short' })}, {new Date(t.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -911,12 +948,70 @@
 							</tr>
 						{:else}
 							<tr>
-								<td colspan="8" class="py-4 text-center text-xs text-gray-400">No recent ledger transactions found.</td>
+								<td colspan="8" class="py-4 text-center text-xs text-gray-400">
+									{ledgerLoading ? 'Loading ledger transactions…' : 'No recent ledger transactions found.'}
+								</td>
 							</tr>
 						{/each}
 					</tbody>
 				</table>
 			</div>
+
+			<!-- Pagination -->
+			{#if ledgerTotal > 0}
+				<div class="mt-3 flex flex-col gap-2 border-t border-gray-100 pt-3 sm:flex-row sm:items-center sm:justify-between dark:border-gray-800">
+					<p class="text-[11px] text-gray-500 dark:text-gray-400">
+						Showing {(ledgerPage - 1) * ledgerPerPage + 1}–{Math.min(ledgerPage * ledgerPerPage, ledgerTotal)} of {ledgerTotal}
+					</p>
+					<div class="flex flex-wrap items-center gap-2">
+						<div class="flex items-center gap-1.5">
+							<span class="text-[11px] text-gray-500 dark:text-gray-400">Per page</span>
+							<select
+								value={ledgerPerPage}
+								onchange={(e) => {
+									ledgerPerPage = Number(e.currentTarget.value);
+									void loadLedger(1);
+								}}
+								class="rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+							>
+								{#each [10, 25, 50] as size (size)}
+									<option value={size}>{size}</option>
+								{/each}
+							</select>
+						</div>
+						<div class="flex items-center gap-1">
+							<button
+								type="button"
+								onclick={() => void loadLedger(ledgerPage - 1)}
+								disabled={ledgerPage === 1 || ledgerLoading}
+								class="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+							>
+								Prev
+							</button>
+							{#each ledgerPageNumbers as pageNumber (pageNumber)}
+								<button
+									type="button"
+									onclick={() => void loadLedger(pageNumber)}
+									disabled={ledgerLoading}
+									class="rounded-lg border px-3 py-1.5 text-xs font-semibold transition {pageNumber === ledgerPage
+										? 'border-emerald-600 bg-emerald-50 text-emerald-700 dark:border-emerald-500 dark:bg-emerald-950/40 dark:text-emerald-300'
+										: 'border-gray-300 bg-white text-gray-700 shadow-sm hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300'}"
+								>
+									{pageNumber}
+								</button>
+							{/each}
+							<button
+								type="button"
+								onclick={() => void loadLedger(ledgerPage + 1)}
+								disabled={ledgerPage === ledgerTotalPages || ledgerLoading}
+								class="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+							>
+								Next
+							</button>
+						</div>
+					</div>
+				</div>
+			{/if}
 		</div>
 	</div>
 </div>

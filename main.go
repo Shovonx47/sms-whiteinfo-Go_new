@@ -28,7 +28,24 @@ type Service struct {
 }
 
 var (
-	baseDir  = "/www/wwwroot/smsagri.softcents.com"
+	baseDir   = "/www/wwwroot/smsagri.softcents.com"
+	services  []*Service
+	startTime = time.Now()
+)
+
+func initServices() {
+	if envDir := os.Getenv("BASE_DIR"); envDir != "" {
+		baseDir = envDir
+	} else if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		if _, err := os.Stat(filepath.Join(exeDir, "customer-api")); err == nil {
+			baseDir = exeDir
+		} else if cwd, err := os.Getwd(); err == nil {
+			if _, err := os.Stat(filepath.Join(cwd, "customer-api")); err == nil {
+				baseDir = cwd
+			}
+		}
+	}
 	services = []*Service{
 		{
 			Name: "superman-api",
@@ -49,8 +66,8 @@ var (
 			Port: "8083",
 		},
 	}
-	startTime = time.Now()
-)
+	log.Printf("[ORCHESTRATOR] Resolved base directory: %s", baseDir)
+}
 
 func streamOutput(prefix string, r io.Reader) {
 	buf := make([]byte, 1024)
@@ -162,6 +179,7 @@ func (s *Service) Stop() {
 
 func main() {
 	log.Println("[ORCHESTRATOR] SMS Whiteinfo BD / SMS Aggregator Master Orchestrator Starting...")
+	initServices()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

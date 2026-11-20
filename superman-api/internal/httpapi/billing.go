@@ -1393,6 +1393,10 @@ type BillingReportSummary struct {
 
 func (server *Server) billingReports(context fiber.Ctx) error {
 	page, perPage := pagination(context)
+	if context.Query("export") == "1" {
+		// Report generation needs every matching row, not a single page.
+		page, perPage = 1, 20000
+	}
 	direction := strings.TrimSpace(context.Query("direction"))
 	search := strings.TrimSpace(context.Query("search"))
 	from := strings.TrimSpace(context.Query("from"))
@@ -1405,9 +1409,14 @@ func (server *Server) billingReports(context fiber.Ctx) error {
 		arguments = append(arguments, direction)
 	}
 	if search != "" {
-		where += " AND (u.name LIKE ? OR u.phone LIKE ? OR t.description LIKE ?)"
 		term := "%" + search + "%"
-		arguments = append(arguments, term, term, term)
+		if txID, err := strconv.ParseInt(strings.TrimPrefix(search, "#"), 10, 64); err == nil && txID > 0 {
+			where += " AND (t.id = ? OR u.name LIKE ? OR u.phone LIKE ? OR t.description LIKE ? OR COALESCE(t.transactionable_type, '') LIKE ?)"
+			arguments = append(arguments, txID, term, term, term, term)
+		} else {
+			where += " AND (u.name LIKE ? OR u.phone LIKE ? OR t.description LIKE ? OR COALESCE(t.transactionable_type, '') LIKE ?)"
+			arguments = append(arguments, term, term, term, term)
+		}
 	}
 	if from != "" {
 		where += " AND DATE(t.created_at) >= ?"
@@ -1438,7 +1447,7 @@ func (server *Server) billingReports(context fiber.Ctx) error {
 		FROM transactions t
 		INNER JOIN users u ON u.id = t.user_id
 		`+where+`
-		ORDER BY t.created_at DESC
+		ORDER BY t.created_at DESC, t.id DESC
 		LIMIT ? OFFSET ?
 	`, arguments...)
 	if err != nil {

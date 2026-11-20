@@ -230,6 +230,27 @@
 		void loadDashboardData();
 	});
 
+	let sortKey = $state<'kyc_status' | 'submitted_at' | null>(null);
+	let sortDir = $state<'asc' | 'desc'>('asc');
+
+	function toggleSort(key: 'kyc_status' | 'submitted_at') {
+		if (sortKey === key) {
+			sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+			return;
+		}
+		sortKey = key;
+		sortDir = 'asc';
+	}
+
+	const sortedCustomers = $derived.by(() => {
+		if (!sortKey) return customers;
+		return [...customers].sort((a, b) => {
+			const left = (sortKey === 'kyc_status' ? a.kyc_status : a.submitted_at) ?? '';
+			const right = (sortKey === 'kyc_status' ? b.kyc_status : b.submitted_at) ?? '';
+			return sortDir === 'asc' ? String(left).localeCompare(String(right)) : String(right).localeCompare(String(left));
+		});
+	});
+
 	const exportColumns: ExportColumn<KYCCustomer>[] = [
 		{ header: 'Customer Name', getValue: (c) => c.full_name },
 		{ header: 'Email', getValue: (c) => c.email },
@@ -240,24 +261,20 @@
 		{ header: 'Verified At', getValue: (c) => (c.verified_at ? new Date(c.verified_at).toLocaleString() : '—') }
 	];
 </script>
-
 <svelte:window onclick={closeMenu} />
 
 <svelte:head>
 	<title>KYC Dashboard — SMS Whiteinfo Administrator</title>
 </svelte:head>
 
-<div class="space-y-5">
-	<!-- Page Header -->
+<div class="space-y-6">
 	<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-		<div>
-			<h1 class="text-2xl font-bold tracking-tight text-gray-950 dark:text-white">KYC Dashboard</h1>
-		</div>
+		<h1 class="text-3xl font-bold tracking-tight text-gray-950 dark:text-white">KYC Dashboard</h1>
 		<div class="flex items-center gap-2">
 			<button
 				type="button"
 				onclick={() => void loadDashboardData()}
-				class="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-2xs hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300 transition"
+				class="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 shadow-2xs hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300 transition"
 			>
 				<svg class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
 					<path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
@@ -273,91 +290,80 @@
 		</div>
 	</div>
 
-	<!-- 8 KPI Metric Cards matching Original Design -->
-	<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-		<!-- Card 1: TOTAL KYC -->
+	<!-- 8 KPI metric cards, four per row like the original panel -->
+	<div class="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-4">
 		<button
 			type="button"
 			onclick={() => selectStatusFilter('all')}
-			class="flex flex-col items-center justify-center rounded-xl border border-gray-200 bg-white py-4 px-3 text-center shadow-2xs transition hover:border-gray-300 hover:shadow-xs dark:border-gray-800 dark:bg-gray-900 {statusFilter === 'all' ? 'ring-2 ring-emerald-500/50' : ''}"
+			class="flex min-h-30 flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-4 py-7 text-center shadow-2xs transition hover:border-gray-300 dark:border-gray-800 dark:bg-gray-900 {statusFilter === 'all' ? 'ring-2 ring-emerald-500/40' : ''}"
 		>
-			<span class="text-2xl sm:text-3xl font-extrabold text-gray-950 dark:text-white">{stats.total_kyc}</span>
-			<span class="mt-1 text-[11px] font-bold tracking-wider text-gray-500 uppercase">TOTAL KYC</span>
+			<span class="text-4xl font-extrabold leading-none text-gray-950 dark:text-white">{stats.total_kyc}</span>
+			<span class="mt-2 text-[11px] font-bold uppercase tracking-wider text-gray-500">TOTAL KYC</span>
 		</button>
 
-		<!-- Card 2: PENDING -->
 		<button
 			type="button"
 			onclick={() => selectStatusFilter('pending')}
-			class="flex flex-col items-center justify-center rounded-xl border border-gray-200 bg-white py-4 px-3 text-center shadow-2xs transition hover:border-gray-300 hover:shadow-xs dark:border-gray-800 dark:bg-gray-900 {statusFilter === 'pending' ? 'ring-2 ring-amber-500/50' : ''}"
+			class="flex min-h-30 flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-4 py-7 text-center shadow-2xs transition hover:border-gray-300 dark:border-gray-800 dark:bg-gray-900 {statusFilter === 'pending' ? 'ring-2 ring-amber-500/40' : ''}"
 		>
-			<span class="text-2xl sm:text-3xl font-extrabold text-gray-950 dark:text-white">{stats.pending}</span>
-			<span class="mt-1 text-[11px] font-bold tracking-wider text-gray-500 uppercase">PENDING</span>
+			<span class="text-4xl font-extrabold leading-none text-gray-950 dark:text-white">{stats.pending}</span>
+			<span class="mt-2 text-[11px] font-bold uppercase tracking-wider text-gray-500">PENDING</span>
 		</button>
 
-		<!-- Card 3: UNDER REVIEW (Yellow/Amber tint) -->
 		<button
 			type="button"
 			onclick={() => selectStatusFilter('under_review')}
-			class="flex flex-col items-center justify-center rounded-xl border border-amber-200/80 bg-amber-50/40 py-4 px-3 text-center shadow-2xs transition hover:border-amber-300 hover:shadow-xs dark:border-amber-900/60 dark:bg-amber-950/20 {statusFilter === 'under_review' ? 'ring-2 ring-amber-500' : ''}"
+			class="flex min-h-30 flex-col items-center justify-center rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-7 text-center shadow-2xs transition hover:border-amber-300 dark:border-amber-900/60 dark:bg-amber-950/20 {statusFilter === 'under_review' ? 'ring-2 ring-amber-500' : ''}"
 		>
-			<span class="text-2xl sm:text-3xl font-extrabold text-amber-500 dark:text-amber-400">{stats.under_review}</span>
-			<span class="mt-1 text-[11px] font-bold tracking-wider text-amber-600/80 uppercase dark:text-amber-400/80">UNDER REVIEW</span>
+			<span class="text-4xl font-extrabold leading-none text-amber-500">{stats.under_review}</span>
+			<span class="mt-2 text-[11px] font-bold uppercase tracking-wider text-amber-600">UNDER REVIEW</span>
 		</button>
 
-		<!-- Card 4: VERIFIED (Green tint) -->
 		<button
 			type="button"
 			onclick={() => selectStatusFilter('verified')}
-			class="flex flex-col items-center justify-center rounded-xl border border-emerald-200/80 bg-emerald-50/30 py-4 px-3 text-center shadow-2xs transition hover:border-emerald-300 hover:shadow-xs dark:border-emerald-900/60 dark:bg-emerald-950/20 {statusFilter === 'verified' ? 'ring-2 ring-emerald-500' : ''}"
+			class="flex min-h-30 flex-col items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50/50 px-4 py-7 text-center shadow-2xs transition hover:border-emerald-300 dark:border-emerald-900/60 dark:bg-emerald-950/20 {statusFilter === 'verified' ? 'ring-2 ring-emerald-500' : ''}"
 		>
-			<span class="text-2xl sm:text-3xl font-extrabold text-emerald-600 dark:text-emerald-400">{stats.verified}</span>
-			<span class="mt-1 text-[11px] font-bold tracking-wider text-emerald-600/80 uppercase dark:text-emerald-400/80">VERIFIED</span>
+			<span class="text-4xl font-extrabold leading-none text-emerald-600">{stats.verified}</span>
+			<span class="mt-2 text-[11px] font-bold uppercase tracking-wider text-emerald-600">VERIFIED</span>
 		</button>
 
-		<!-- Card 5: REJECTED (Red text) -->
 		<button
 			type="button"
 			onclick={() => selectStatusFilter('rejected')}
-			class="flex flex-col items-center justify-center rounded-xl border border-gray-200 bg-white py-4 px-3 text-center shadow-2xs transition hover:border-gray-300 hover:shadow-xs dark:border-gray-800 dark:bg-gray-900 {statusFilter === 'rejected' ? 'ring-2 ring-rose-500/50' : ''}"
+			class="flex min-h-30 flex-col items-center justify-center rounded-xl border border-rose-200 bg-rose-50/50 px-4 py-7 text-center shadow-2xs transition hover:border-rose-300 dark:border-rose-900/60 dark:bg-rose-950/20 {statusFilter === 'rejected' ? 'ring-2 ring-rose-500/40' : ''}"
 		>
-			<span class="text-2xl sm:text-3xl font-extrabold text-rose-600 dark:text-rose-400">{stats.rejected}</span>
-			<span class="mt-1 text-[11px] font-bold tracking-wider text-gray-500 uppercase">REJECTED</span>
+			<span class="text-4xl font-extrabold leading-none text-rose-600">{stats.rejected}</span>
+			<span class="mt-2 text-[11px] font-bold uppercase tracking-wider text-rose-600">REJECTED</span>
 		</button>
 
-		<!-- Card 6: RESUBMIT REQUIRED (Blue text) -->
 		<button
 			type="button"
 			onclick={() => selectStatusFilter('resubmit_required')}
-			class="flex flex-col items-center justify-center rounded-xl border border-gray-200 bg-white py-4 px-3 text-center shadow-2xs transition hover:border-gray-300 hover:shadow-xs dark:border-gray-800 dark:bg-gray-900 {statusFilter === 'resubmit_required' ? 'ring-2 ring-blue-500/50' : ''}"
+			class="flex min-h-30 flex-col items-center justify-center rounded-xl border border-blue-200 bg-blue-50/50 px-4 py-7 text-center shadow-2xs transition hover:border-blue-300 dark:border-blue-900/60 dark:bg-blue-950/20 {statusFilter === 'resubmit_required' ? 'ring-2 ring-blue-500/40' : ''}"
 		>
-			<span class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400">{stats.resubmit_required}</span>
-			<span class="mt-1 text-[11px] font-bold tracking-wider text-gray-500 uppercase">RESUBMIT REQUIRED</span>
+			<span class="text-4xl font-extrabold leading-none text-blue-600">{stats.resubmit_required}</span>
+			<span class="mt-2 text-[11px] font-bold uppercase tracking-wider text-blue-600">RESUBMIT REQUIRED</span>
 		</button>
 
-		<!-- Card 7: TODAY'S SUBMISSIONS (Indigo text) -->
-		<div class="flex flex-col items-center justify-center rounded-xl border border-gray-200 bg-white py-4 px-3 text-center shadow-2xs dark:border-gray-800 dark:bg-gray-900">
-			<span class="text-2xl sm:text-3xl font-extrabold text-indigo-600 dark:text-indigo-400">{stats.today_submissions}</span>
-			<span class="mt-1 text-[11px] font-bold tracking-wider text-gray-500 uppercase">TODAY'S SUBMISSIONS</span>
+		<div class="flex min-h-30 flex-col items-center justify-center rounded-xl border border-indigo-200 bg-indigo-50/50 px-4 py-7 text-center shadow-2xs dark:border-indigo-900/60 dark:bg-indigo-950/20">
+			<span class="text-4xl font-extrabold leading-none text-indigo-600">{stats.today_submissions}</span>
+			<span class="mt-2 text-[11px] font-bold uppercase tracking-wider text-indigo-600">TODAY'S SUBMISSIONS</span>
 		</div>
 
-		<!-- Card 8: TODAY'S APPROVED (Teal/Emerald tint) -->
-		<div class="flex flex-col items-center justify-center rounded-xl border border-teal-200/80 bg-teal-50/30 py-4 px-3 text-center shadow-2xs dark:border-teal-900/60 dark:bg-teal-950/20">
-			<span class="text-2xl sm:text-3xl font-extrabold text-teal-600 dark:text-teal-400">{stats.today_approved}</span>
-			<span class="mt-1 text-[11px] font-bold tracking-wider text-teal-600/80 uppercase dark:text-teal-400/80">TODAY'S APPROVED</span>
+		<div class="flex min-h-30 flex-col items-center justify-center rounded-xl border border-teal-200 bg-teal-50/50 px-4 py-7 text-center shadow-2xs dark:border-teal-900/60 dark:bg-teal-950/20">
+			<span class="text-4xl font-extrabold leading-none text-teal-600">{stats.today_approved}</span>
+			<span class="mt-2 text-[11px] font-bold uppercase tracking-wider text-teal-600">TODAY'S APPROVED</span>
 		</div>
 	</div>
 
-	<!-- Main Records Table Card -->
+	<!-- Records table -->
 	<div class="rounded-xl border border-gray-200 bg-white shadow-xs dark:border-gray-800 dark:bg-gray-900">
-		<!-- Toolbar with Right-Aligned Search -->
-		<div class="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between border-b border-gray-100 dark:border-gray-800">
-			<div class="flex items-center gap-2">
+		<div class="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+			<div class="text-xs text-gray-500">
 				{#if statusFilter !== 'all'}
-					<span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300">
-						Filter: {statusFilter.replace('_', ' ').toUpperCase()}
-						<button type="button" onclick={() => selectStatusFilter('all')} class="hover:opacity-75">✕</button>
-					</span>
+					Filtered by <span class="font-semibold text-gray-800 dark:text-gray-200">{statusFilter.replace('_', ' ')}</span>
+					<button type="button" onclick={() => selectStatusFilter('all')} class="ml-2 font-semibold text-emerald-600 hover:underline">Clear</button>
 				{/if}
 			</div>
 
@@ -371,110 +377,129 @@
 						bind:value={search}
 						oninput={handleSearchInput}
 						placeholder="Search"
-						class="w-full rounded-lg border border-gray-200 bg-gray-50/50 py-1.5 pl-8 pr-3 text-xs outline-none focus:border-emerald-500 focus:bg-white dark:border-gray-700 dark:bg-gray-800 dark:text-white transition"
+						class="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-8 pr-3 text-xs outline-none focus:border-emerald-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white transition"
 					/>
 				</div>
-				<!-- Filter icon button -->
+
+				<div class="relative">
+					<button
+						type="button"
+						onclick={() => selectStatusFilter(statusFilter === 'all' ? 'under_review' : 'all')}
+						class="rounded-lg border border-gray-200 bg-white p-2 text-gray-500 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 transition"
+						title="Filter by review status"
+					>
+						<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 0 1-.659 1.591l-5.432 5.432a2.25 2.25 0 0 0-.659 1.591v2.927a2.25 2.25 0 0 1-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 0 0-.659-1.591L3.659 7.409A2.25 2.25 0 0 1 3 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0 1 12 3Z" />
+						</svg>
+					</button>
+					<span class="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-gray-200 px-1 text-[10px] font-bold text-gray-700 dark:bg-gray-700 dark:text-gray-200">
+						{statusFilter === 'all' ? 0 : 1}
+					</span>
+				</div>
+
 				<button
 					type="button"
-					onclick={() => selectStatusFilter(statusFilter === 'all' ? 'under_review' : 'all')}
 					class="rounded-lg border border-gray-200 bg-white p-2 text-gray-500 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 transition"
-					title="Toggle review filter"
+					title="Column settings"
 				>
 					<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 0 1-.659 1.591l-5.432 5.432a2.25 2.25 0 0 0-.659 1.591v2.927a2.25 2.25 0 0 1-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 0 0-.659-1.591L3.659 7.409A2.25 2.25 0 0 1 3 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0 1 12 3Z" />
+						<path stroke-linecap="round" stroke-linejoin="round" d="M3.75 5.25h16.5M3.75 12h16.5M3.75 18.75h16.5" />
 					</svg>
 				</button>
 			</div>
 		</div>
 
-		<!-- Table Content -->
 		{#if error}
 			<div class="p-6 text-center text-xs text-rose-600">{error}</div>
 		{:else}
 			<div class="overflow-x-auto">
 				<table class="w-full text-left text-xs">
 					<thead>
-						<tr class="border-b border-gray-100 text-[11px] font-bold text-gray-600 uppercase dark:border-gray-800 dark:text-gray-400">
-							<th class="py-3 px-4">FULL NAME</th>
-							<th class="py-3 px-4">EMAIL</th>
-							<th class="py-3 px-4">MOBILE</th>
-							<th class="py-3 px-4">NID NUMBER</th>
-							<th class="py-3 px-4">KYC STATUS</th>
-							<th class="py-3 px-4">SUBMITTED AT</th>
-							<th class="py-3 px-4 text-right"></th>
+						<tr class="border-y border-gray-100 text-[11px] font-bold uppercase text-gray-700 dark:border-gray-800 dark:text-gray-300">
+							<th class="px-5 py-3.5">FULL NAME</th>
+							<th class="px-5 py-3.5">EMAIL</th>
+							<th class="px-5 py-3.5">MOBILE</th>
+							<th class="px-5 py-3.5">NID NUMBER</th>
+							<th class="px-5 py-3.5">
+								<button type="button" onclick={() => toggleSort('kyc_status')} class="inline-flex items-center gap-1 uppercase hover:text-gray-900 dark:hover:text-white">
+									KYC STATUS
+									<svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+										<path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+									</svg>
+								</button>
+							</th>
+							<th class="px-5 py-3.5">
+								<button type="button" onclick={() => toggleSort('submitted_at')} class="inline-flex items-center gap-1 uppercase hover:text-gray-900 dark:hover:text-white">
+									SUBMITTED AT
+									<svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+										<path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+									</svg>
+								</button>
+							</th>
+							<th class="px-5 py-3.5"></th>
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-gray-100 dark:divide-gray-800">
 						{#if customers.length === 0}
 							<tr>
-								<td colspan="7" class="py-12 text-center text-gray-400 text-xs">
+								<td colspan="7" class="px-5 py-12 text-center text-xs text-gray-400">
 									No KYC records found matching criteria.
 								</td>
 							</tr>
 						{:else}
-							{#each customers as cust}
+							{#each sortedCustomers as cust (cust.id)}
 								<tr
 									onclick={() => goto(`/superman/users/customers/${cust.id}`)}
-									class="cursor-pointer hover:bg-gray-50/70 dark:hover:bg-gray-800/40 transition-colors"
+									class="cursor-pointer transition-colors hover:bg-gray-50/70 dark:hover:bg-gray-800/40"
 								>
-									<td class="py-3.5 px-4 font-bold text-gray-900 dark:text-white">
-										{cust.full_name}
-									</td>
-									<td class="py-3.5 px-4 text-gray-600 dark:text-gray-300">
-										{cust.email}
-									</td>
-									<td class="py-3.5 px-4 font-mono text-gray-700 dark:text-gray-300">
-										{cust.mobile}
-									</td>
-									<td class="py-3.5 px-4 font-mono text-gray-700 dark:text-gray-300">
-										{cust.nid_number ?? '—'}
-									</td>
-									<td class="py-3.5 px-4">
+									<td class="px-5 py-5 font-bold text-gray-900 dark:text-white">{cust.full_name}</td>
+									<td class="px-5 py-5 text-gray-600 dark:text-gray-300">{cust.email}</td>
+									<td class="px-5 py-5 font-mono text-gray-700 dark:text-gray-300">{cust.mobile}</td>
+									<td class="px-5 py-5 font-mono text-gray-700 dark:text-gray-300">{cust.nid_number ?? '—'}</td>
+									<td class="px-5 py-5">
 										{#if cust.kyc_status === 'verified'}
-											<span class="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
-												<span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+											<span class="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+												<svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" /></svg>
 												Verified
 											</span>
 										{:else if cust.kyc_status === 'under_review'}
-											<span class="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+											<span class="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
 												<span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
 												Under Review
 											</span>
 										{:else if cust.kyc_status === 'resubmit_required'}
-											<span class="inline-flex items-center gap-1 rounded-full border border-blue-300 bg-blue-50 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
+											<span class="inline-flex items-center gap-1 rounded-full border border-blue-300 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
 												<span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
 												Resubmit Required
 											</span>
 										{:else if cust.kyc_status === 'rejected'}
-											<span class="inline-flex items-center gap-1 rounded-full border border-rose-300 bg-rose-50 px-2.5 py-0.5 text-[11px] font-semibold text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300">
+											<span class="inline-flex items-center gap-1 rounded-full border border-rose-300 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300">
 												<span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>
 												Rejected
 											</span>
 										{:else}
-											<span class="inline-flex items-center gap-1 rounded-full border border-gray-300 bg-gray-50 px-2.5 py-0.5 text-[11px] font-semibold text-gray-700 dark:border-gray-700 dark:bg-gray-800/40 dark:text-gray-300">
+											<span class="inline-flex items-center gap-1 rounded-full border border-gray-300 bg-gray-50 px-2.5 py-1 text-[11px] font-semibold text-gray-700 dark:border-gray-700 dark:bg-gray-800/40 dark:text-gray-300">
 												<span class="h-1.5 w-1.5 rounded-full bg-gray-400"></span>
 												Pending
 											</span>
 										{/if}
 									</td>
-									<td class="py-3.5 px-4 font-mono text-[11px] text-gray-500 dark:text-gray-400">
+									<td class="px-5 py-5 font-mono text-[11px] text-gray-500 dark:text-gray-400">
 										{formatDateTime(cust.submitted_at ?? cust.verified_at)}
 									</td>
-									<td class="py-3.5 px-4 text-right relative">
+									<td class="relative px-5 py-5 text-right">
 										<button
 											type="button"
 											onclick={(e) => toggleMenu(cust.id, e)}
-											class="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-200 transition"
+											class="rounded-lg border border-gray-200 p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:border-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200 transition"
 										>
 											<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
 												<path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
 											</svg>
 										</button>
 
-										<!-- Dropdown Menu -->
 										{#if activeMenuId === cust.id}
-											<div class="absolute right-4 top-10 z-30 w-44 rounded-xl border border-gray-100 bg-white p-1 text-left shadow-xl dark:border-gray-800 dark:bg-gray-900">
+											<div class="absolute right-5 top-14 z-30 w-44 rounded-xl border border-gray-100 bg-white p-1 text-left shadow-xl dark:border-gray-800 dark:bg-gray-900">
 												<button
 													type="button"
 													onclick={(e) => openInspect(cust, e)}
@@ -528,8 +553,7 @@
 				</table>
 			</div>
 
-			<!-- Pagination Footer Matching Screenshot 3 -->
-			<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 border-t border-gray-100 dark:border-gray-800 text-xs text-gray-500">
+			<div class="flex flex-col gap-3 border-t border-gray-100 p-4 text-xs text-gray-500 sm:flex-row sm:items-center sm:justify-between dark:border-gray-800">
 				<div>
 					Showing {totalRecords === 0 ? 0 : (currentPage - 1) * perPage + 1} to {Math.min(currentPage * perPage, totalRecords)} of {totalRecords} results
 				</div>
@@ -576,70 +600,66 @@
 <!-- Inspect Documents Modal -->
 {#if inspectModalOpen && inspectingCustomer}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-		<div class="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-gray-900 border border-gray-100 dark:border-gray-800 space-y-4">
+		<div class="max-h-[90vh] w-full max-w-2xl space-y-4 overflow-y-auto rounded-2xl border border-gray-100 bg-white p-6 shadow-2xl dark:border-gray-800 dark:bg-gray-900">
 			<div class="flex items-center justify-between border-b border-gray-100 pb-3 dark:border-gray-800">
 				<div>
 					<h3 class="text-base font-bold text-gray-900 dark:text-white">KYC Document Inspector</h3>
 					<p class="text-xs text-gray-500">Examine uploaded credentials for {inspectingCustomer.full_name}</p>
 				</div>
-				<button onclick={() => (inspectModalOpen = false)} class="text-gray-400 hover:text-gray-600 text-sm">✕</button>
+				<button onclick={() => (inspectModalOpen = false)} class="text-sm text-gray-400 hover:text-gray-600">✕</button>
 			</div>
 
 			{#if inspectLoading}
 				<div class="py-12 text-center text-xs text-gray-400">Loading document details…</div>
 			{:else}
-				<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+				<div class="grid grid-cols-1 gap-4 text-xs sm:grid-cols-2">
 					<div class="space-y-1">
-						<span class="text-gray-400 block font-medium">Customer</span>
+						<span class="block font-medium text-gray-400">Customer</span>
 						<span class="font-semibold text-gray-900 dark:text-white">{inspectingCustomer.full_name}</span>
 						<div class="text-[11px] text-gray-500">{inspectingCustomer.email} • {inspectingCustomer.mobile}</div>
 					</div>
 					<div class="space-y-1">
-						<span class="text-gray-400 block font-medium">NID / Smart Card</span>
+						<span class="block font-medium text-gray-400">NID / Smart Card</span>
 						<span class="font-mono font-bold text-gray-800 dark:text-gray-200">{inspectingCustomer.nid_number ?? '—'}</span>
 					</div>
 				</div>
 
 				<div class="border-t border-gray-100 pt-3 dark:border-gray-800">
-					<h4 class="text-xs font-bold text-gray-900 dark:text-white mb-2 uppercase tracking-wider text-[10px] text-gray-400">Uploaded Verification Files</h4>
-					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-						<!-- Front NID -->
-						<div class="rounded-xl border border-gray-200 p-3 bg-gray-50/50 dark:border-gray-800 dark:bg-gray-800/40 space-y-2">
-							<span class="font-semibold text-gray-900 dark:text-white text-[11px]">Front National ID</span>
+					<h4 class="mb-2 text-[10px] font-bold uppercase tracking-wider text-gray-400">Uploaded Verification Files</h4>
+					<div class="grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
+						<div class="space-y-2 rounded-xl border border-gray-200 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-800/40">
+							<span class="text-[11px] font-semibold text-gray-900 dark:text-white">Front National ID</span>
 							{#if inspectData?.front_nid}
-								<img src={inspectData.front_nid} alt="Front NID" class="h-32 w-full object-cover rounded-lg border border-gray-200 dark:border-gray-700" />
+								<img src={inspectData.front_nid} alt="Front NID" class="h-32 w-full rounded-lg border border-gray-200 object-cover dark:border-gray-700" />
 							{:else}
-								<div class="h-32 flex items-center justify-center rounded-lg border border-dashed border-gray-200 text-gray-400 text-xs">No file uploaded</div>
+								<div class="flex h-32 items-center justify-center rounded-lg border border-dashed border-gray-200 text-xs text-gray-400">No file uploaded</div>
 							{/if}
 						</div>
 
-						<!-- Back NID -->
-						<div class="rounded-xl border border-gray-200 p-3 bg-gray-50/50 dark:border-gray-800 dark:bg-gray-800/40 space-y-2">
-							<span class="font-semibold text-gray-900 dark:text-white text-[11px]">Back National ID</span>
+						<div class="space-y-2 rounded-xl border border-gray-200 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-800/40">
+							<span class="text-[11px] font-semibold text-gray-900 dark:text-white">Back National ID</span>
 							{#if inspectData?.back_nid}
-								<img src={inspectData.back_nid} alt="Back NID" class="h-32 w-full object-cover rounded-lg border border-gray-200 dark:border-gray-700" />
+								<img src={inspectData.back_nid} alt="Back NID" class="h-32 w-full rounded-lg border border-gray-200 object-cover dark:border-gray-700" />
 							{:else}
-								<div class="h-32 flex items-center justify-center rounded-lg border border-dashed border-gray-200 text-gray-400 text-xs">No file uploaded</div>
+								<div class="flex h-32 items-center justify-center rounded-lg border border-dashed border-gray-200 text-xs text-gray-400">No file uploaded</div>
 							{/if}
 						</div>
 
-						<!-- Live Selfie -->
-						<div class="rounded-xl border border-gray-200 p-3 bg-gray-50/50 dark:border-gray-800 dark:bg-gray-800/40 space-y-2">
-							<span class="font-semibold text-gray-900 dark:text-white text-[11px]">Live Facial Photo</span>
+						<div class="space-y-2 rounded-xl border border-gray-200 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-800/40">
+							<span class="text-[11px] font-semibold text-gray-900 dark:text-white">Live Facial Photo</span>
 							{#if inspectData?.live_photo}
-								<img src={inspectData.live_photo} alt="Live Facial Photo" class="h-32 w-full object-cover rounded-lg border border-gray-200 dark:border-gray-700" />
+								<img src={inspectData.live_photo} alt="Live Facial Photo" class="h-32 w-full rounded-lg border border-gray-200 object-cover dark:border-gray-700" />
 							{:else}
-								<div class="h-32 flex items-center justify-center rounded-lg border border-dashed border-gray-200 text-gray-400 text-xs">No file uploaded</div>
+								<div class="flex h-32 items-center justify-center rounded-lg border border-dashed border-gray-200 text-xs text-gray-400">No file uploaded</div>
 							{/if}
 						</div>
 
-						<!-- Trade License -->
-						<div class="rounded-xl border border-gray-200 p-3 bg-gray-50/50 dark:border-gray-800 dark:bg-gray-800/40 space-y-2">
-							<span class="font-semibold text-gray-900 dark:text-white text-[11px]">Trade License File</span>
+						<div class="space-y-2 rounded-xl border border-gray-200 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-800/40">
+							<span class="text-[11px] font-semibold text-gray-900 dark:text-white">Trade License File</span>
 							{#if inspectData?.trade_license_file}
-								<img src={inspectData.trade_license_file} alt="Trade License" class="h-32 w-full object-cover rounded-lg border border-gray-200 dark:border-gray-700" />
+								<img src={inspectData.trade_license_file} alt="Trade License" class="h-32 w-full rounded-lg border border-gray-200 object-cover dark:border-gray-700" />
 							{:else}
-								<div class="h-32 flex items-center justify-center rounded-lg border border-dashed border-gray-200 text-gray-400 text-xs">Optional / None</div>
+								<div class="flex h-32 items-center justify-center rounded-lg border border-dashed border-gray-200 text-xs text-gray-400">Optional / None</div>
 							{/if}
 						</div>
 					</div>
@@ -649,7 +669,7 @@
 					<button
 						type="button"
 						onclick={() => handleResubmit(inspectingCustomer!.id, inspectingCustomer!.full_name)}
-						class="rounded-lg bg-amber-500 hover:bg-amber-600 px-3 py-1.5 text-xs font-bold text-white transition"
+						class="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-amber-600"
 					>
 						Request Resubmission
 					</button>
@@ -658,14 +678,14 @@
 						<button
 							type="button"
 							onclick={() => handleReject(inspectingCustomer!.id, inspectingCustomer!.full_name)}
-							class="rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-300 px-3 py-1.5 text-xs font-bold transition"
+							class="rounded-lg border border-rose-300 px-3 py-1.5 text-xs font-bold text-rose-700 transition hover:bg-rose-50 dark:border-rose-800 dark:text-rose-300"
 						>
 							Reject
 						</button>
 						<button
 							type="button"
 							onclick={() => handleApprove(inspectingCustomer!.id, inspectingCustomer!.full_name)}
-							class="rounded-lg bg-emerald-600 hover:bg-emerald-700 px-4 py-1.5 text-xs font-bold text-white shadow-xs transition"
+							class="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white shadow-xs transition hover:bg-emerald-700"
 						>
 							Approve KYC
 						</button>

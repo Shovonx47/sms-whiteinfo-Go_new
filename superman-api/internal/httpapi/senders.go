@@ -36,6 +36,7 @@ type senderListItem struct {
 	Users           []senderUserRef `json:"users"`
 	UsersCount      int             `json:"users_count"`
 	MessagesCount   int             `json:"messages_count"`
+	Routes          []senderRoute   `json:"routes"`
 }
 
 type senderCreatePayload struct {
@@ -48,12 +49,13 @@ type senderCreatePayload struct {
 }
 
 type senderUpdatePayload struct {
-	SenderID       string   `json:"sender_id"`
-	GatewayID      *int64   `json:"gateway_id"`
-	Type           string   `json:"type"`
-	IsEnabled      *bool    `json:"is_enabled"`
-	ApprovalStatus string   `json:"approval_status"`
-	UserIDs        *[]int64 `json:"user_ids"`
+	SenderID       string           `json:"sender_id"`
+	GatewayID      *int64           `json:"gateway_id"`
+	Type           string           `json:"type"`
+	IsEnabled      *bool            `json:"is_enabled"`
+	ApprovalStatus string           `json:"approval_status"`
+	UserIDs        *[]int64         `json:"user_ids"`
+	Routes         map[string]int64 `json:"routes"`
 }
 
 type senderAssignmentPayload struct {
@@ -65,7 +67,8 @@ type senderEnabledPayload struct {
 }
 
 type senderApprovePayload struct {
-	GatewayID int64 `json:"gateway_id"`
+	GatewayID int64            `json:"gateway_id"`
+	Routes    map[string]int64 `json:"routes"`
 }
 
 type senderRejectPayload struct {
@@ -93,12 +96,13 @@ func senderTypeClause(value string) (string, []any) {
 
 func normalizeSenderType(value string) string {
 	trimmed := strings.ToLower(strings.TrimSpace(value))
-	switch strings.ReplaceAll(trimmed, "_", "-") {
-	case "non-masking", "number":
+	collapsed := strings.ReplaceAll(strings.ReplaceAll(trimmed, "_", "-"), " ", "-")
+	switch collapsed {
+	case "non-masking", "number", "numeric":
 		return "numeric"
-	case "short-code":
+	case "short-code", "shortcode":
 		return "shortcode"
-	case "masking", "alpha", "alpha-numeric":
+	case "masking", "alpha", "alpha-numeric", "alphanumeric", "brand-id":
 		return "alphanumeric"
 	case "":
 		return "alphanumeric"
@@ -166,9 +170,31 @@ func (server *Server) senderUsers(senderIDs []int64) (map[int64][]senderUserRef,
 	return refs, rows.Err()
 }
 
+// senderSortColumns whitelists what the list may be ordered by.
+var senderSortColumns = map[string]string{
+	"sender_id":       "s.sender_id",
+	"type":            "s.type",
+	"approval_status": "s.approval_status",
+	"is_enabled":      "s.is_enabled",
+	"created_at":      "s.created_at",
+	"gateway":         "g.name",
+}
+
 func (server *Server) senders(context fiber.Ctx) error {
 	page, perPage := pagination(context)
+	if context.Query("export") == "1" {
+		page, perPage = 1, 10000
+	}
 	search := strings.TrimSpace(context.Query("search"))
+	enabled := strings.ToLower(strings.TrimSpace(context.Query("enabled")))
+	orderBy := "s.id DESC"
+	if column, ok := senderSortColumns[strings.TrimSpace(context.Query("sort"))]; ok {
+		direction := "ASC"
+		if strings.EqualFold(context.Query("dir"), "desc") {
+			direction = "DESC"
+		}
+		orderBy = column + " " + direction + ", s.id DESC"
+	}
 	status := strings.TrimSpace(context.Query("status"))
 	assignment := strings.ToLower(strings.TrimSpace(context.Query("assignment")))
 	gatewayID, _ := strconv.ParseInt(context.Query("gateway_id"), 10, 64)
@@ -194,14 +220,26 @@ func (server *Server) senders(context fiber.Ctx) error {
 	case "unused":
 		where += " AND NOT EXISTS (SELECT 1 FROM sender_user su WHERE su.sender_id = s.id)"
 	}
+	switch enabled {
+	case "yes", "1", "true":
+		where += " AND s.is_enabled = TRUE"
+	case "no", "0", "false":
+		where += " AND s.is_enabled = FALSE"
+	}
+	if senderIDTerm := strings.TrimSpace(context.Query("sender_id")); senderIDTerm != "" {
+		where += " AND s.sender_id LIKE ?"
+		arguments = append(arguments, "%"+senderIDTerm+"%")
+	}
 	if search != "" {
 		term := "%" + search + "%"
 		where += ` AND (s.sender_id LIKE ?
 			OR g.name LIKE ?
 			OR u.name LIKE ?
+			OR EXISTS (SELECT 1 FROM sender_operator_gateways sr INNER JOIN gateways rg ON rg.id = sr.gateway_id
+				WHERE sr.sender_id = s.id AND rg.name LIKE ?)
 			OR EXISTS (SELECT 1 FROM sender_user su2 INNER JOIN users cu ON cu.id = su2.user_id
 				WHERE su2.sender_id = s.id AND (cu.name LIKE ? OR cu.business_name LIKE ? OR cu.email LIKE ?)))`
-		arguments = append(arguments, term, term, term, term, term, term)
+		arguments = append(arguments, term, term, term, term, term, term, term)
 	}
 
 	var total int
@@ -224,7 +262,7 @@ func (server *Server) senders(context fiber.Ctx) error {
 		LEFT JOIN gateways g ON g.id = s.gateway_id
 		LEFT JOIN users u ON u.id = s.requested_by
 		`+where+`
-		ORDER BY s.id DESC
+		ORDER BY `+orderBy+`
 		LIMIT ? OFFSET ?
 	`, arguments...)
 	if err != nil {
@@ -288,11 +326,20 @@ func (server *Server) senders(context fiber.Ctx) error {
 	if err != nil {
 		return databaseError(context, err)
 	}
+	routeRefs, err := server.senderRoutes(ids)
+	if err != nil {
+		return databaseError(context, err)
+	}
 	for index := range items {
 		if users, ok := refs[items[index].ID]; ok {
 			items[index].Users = users
 		} else {
 			items[index].Users = []senderUserRef{}
+		}
+		if routes, ok := routeRefs[items[index].ID]; ok {
+			items[index].Routes = routes
+		} else {
+			items[index].Routes = []senderRoute{}
 		}
 	}
 
@@ -368,93 +415,17 @@ func (server *Server) senderDetail(context fiber.Ctx) error {
 		item.Users = []senderUserRef{}
 	}
 	item.UsersCount = len(item.Users)
+	routeRefs, err := server.senderRoutes([]int64{item.ID})
+	if err != nil {
+		return databaseError(context, err)
+	}
+	item.Routes = routeRefs[item.ID]
+	if item.Routes == nil {
+		item.Routes = []senderRoute{}
+	}
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM messages WHERE sender_id = ?", item.ID).Scan(&item.MessagesCount)
 
 	return context.JSON(fiber.Map{"data": item})
-}
-
-func (server *Server) createSender(context fiber.Ctx) error {
-	payload := senderCreatePayload{}
-	if err := json.Unmarshal(context.Body(), &payload); err != nil {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Invalid sender payload."})
-	}
-
-	senderType := normalizeSenderType(payload.Type)
-	isEnabled := true
-	if payload.IsEnabled != nil {
-		isEnabled = *payload.IsEnabled
-	}
-
-	requested := []string{}
-	for _, candidate := range append([]string{payload.SenderID}, payload.SenderIDs...) {
-		trimmed := strings.TrimSpace(candidate)
-		if trimmed != "" {
-			requested = append(requested, trimmed)
-		}
-	}
-	if len(requested) == 0 {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "A sender ID is required."})
-	}
-	if payload.GatewayID <= 0 {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "A gateway is required."})
-	}
-
-	var gatewayExists int
-	if err := server.db.QueryRow("SELECT COUNT(*) FROM gateways WHERE id = ? AND deleted_at IS NULL", payload.GatewayID).Scan(&gatewayExists); err != nil {
-		return databaseError(context, err)
-	}
-	if gatewayExists == 0 {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "The selected gateway no longer exists."})
-	}
-
-	created := 0
-	updated := 0
-	lastID := int64(0)
-	for _, senderID := range requested {
-		var existingID int64
-		err := server.db.QueryRow(
-			"SELECT id FROM senders WHERE sender_id = ? AND gateway_id = ? LIMIT 1",
-			senderID, payload.GatewayID,
-		).Scan(&existingID)
-		switch {
-		case err == nil:
-			if _, err := server.db.Exec(`
-				UPDATE senders SET type = ?, is_enabled = ?, deleted_at = NULL, updated_at = NOW() WHERE id = ?
-			`, senderType, isEnabled, existingID); err != nil {
-				return databaseError(context, err)
-			}
-			lastID = existingID
-			updated++
-		default:
-			result, err := server.db.Exec(`
-				INSERT INTO senders (gateway_id, sender_id, type, is_enabled, approval_status, created_at, updated_at)
-				VALUES (?, ?, ?, ?, 'approved', NOW(), NOW())
-			`, payload.GatewayID, senderID, senderType, isEnabled)
-			if err != nil {
-				return databaseError(context, err)
-			}
-			newID, _ := result.LastInsertId()
-			lastID = newID
-			created++
-		}
-
-		if len(payload.UserIDs) > 0 && lastID > 0 {
-			if err := server.attachSenderUsers(lastID, payload.UserIDs); err != nil {
-				return databaseError(context, err)
-			}
-		}
-	}
-
-	message := fmt.Sprintf("%d sender ID(s) created.", created)
-	if updated > 0 {
-		message = fmt.Sprintf("%d sender ID(s) created, %d updated.", created, updated)
-	}
-
-	return context.Status(http.StatusCreated).JSON(fiber.Map{"message": message, "data": fiber.Map{
-		"created": created,
-		"updated": updated,
-		"id":      lastID,
-	}})
 }
 
 func (server *Server) updateSender(context fiber.Ctx) error {
@@ -478,6 +449,61 @@ func (server *Server) updateSender(context fiber.Ctx) error {
 
 	sets := []string{}
 	arguments := []any{}
+
+	var currentSenderID, currentType string
+	if err := server.db.QueryRow("SELECT sender_id, type FROM senders WHERE id = ?", id).Scan(&currentSenderID, &currentType); err != nil {
+		return databaseError(context, err)
+	}
+	effectiveID := currentSenderID
+	if senderID := strings.TrimSpace(payload.SenderID); senderID != "" {
+		effectiveID = senderID
+	}
+	effectiveType := currentType
+	if strings.TrimSpace(payload.Type) != "" {
+		effectiveType = normalizeSenderType(payload.Type)
+	}
+	if effectiveID != currentSenderID || effectiveType != currentType {
+		if message := validateSenderID(effectiveID, effectiveType); message != "" {
+			return unprocessable(context, message)
+		}
+	}
+	if effectiveID != currentSenderID {
+		var duplicates int
+		if err := server.db.QueryRow(
+			"SELECT COUNT(*) FROM senders WHERE sender_id = ? AND id <> ? AND deleted_at IS NULL", effectiveID, id).Scan(&duplicates); err != nil {
+			return databaseError(context, err)
+		}
+		if duplicates > 0 {
+			return unprocessable(context, fmt.Sprintf("Sender ID %s already exists.", effectiveID))
+		}
+	}
+
+	routes := normalizeRoutes(payload.Routes)
+	if payload.Routes != nil && effectiveType != "numeric" {
+		if missing := missingOperators(routes); len(missing) > 0 {
+			return unprocessable(context, "Assign a gateway for every operator: "+strings.Join(missing, ", ")+".")
+		}
+		primary := routes["gp"]
+		payload.GatewayID = &primary
+	}
+	for _, gatewayID := range append(mapValues(routes), func() []int64 {
+		if payload.GatewayID != nil {
+			return []int64{*payload.GatewayID}
+		}
+		return nil
+	}()...) {
+		if gatewayID <= 0 {
+			continue
+		}
+		exists, err := server.gatewayExistsByID(gatewayID)
+		if err != nil {
+			return databaseError(context, err)
+		}
+		if !exists {
+			return unprocessable(context, "The selected gateway no longer exists.")
+		}
+	}
+
 	if senderID := strings.TrimSpace(payload.SenderID); senderID != "" {
 		sets = append(sets, "sender_id = ?")
 		arguments = append(arguments, senderID)
@@ -508,6 +534,16 @@ func (server *Server) updateSender(context fiber.Ctx) error {
 		if _, err := server.db.Exec(
 			"UPDATE senders SET "+strings.Join(sets, ", ")+" WHERE id = ?", arguments...,
 		); err != nil {
+			return databaseError(context, err)
+		}
+	}
+
+	if effectiveType == "numeric" {
+		if err := server.saveSenderRoutes(id, map[string]int64{}); err != nil {
+			return databaseError(context, err)
+		}
+	} else if payload.Routes != nil {
+		if err := server.saveSenderRoutes(id, routes); err != nil {
 			return databaseError(context, err)
 		}
 	}
@@ -669,11 +705,11 @@ func (server *Server) approveSender(context fiber.Ctx) error {
 	_ = json.Unmarshal(context.Body(), &payload)
 
 	var approvalStatus string
-	var senderID string
+	var senderID, senderType string
 	var storedGatewayID sql.NullInt64
 	err = server.db.QueryRow(
-		"SELECT sender_id, approval_status, gateway_id FROM senders WHERE id = ? AND deleted_at IS NULL",
-		id).Scan(&senderID, &approvalStatus, &storedGatewayID)
+		"SELECT sender_id, type, approval_status, gateway_id FROM senders WHERE id = ? AND deleted_at IS NULL",
+		id).Scan(&senderID, &senderType, &approvalStatus, &storedGatewayID)
 	if err != nil {
 		return databaseError(context, err)
 	}
@@ -683,7 +719,16 @@ func (server *Server) approveSender(context fiber.Ctx) error {
 		})
 	}
 
+	routes := normalizeRoutes(payload.Routes)
 	gatewayID := payload.GatewayID
+	if senderType != "numeric" && len(routes) > 0 {
+		if missing := missingOperators(routes); len(missing) > 0 {
+			return unprocessable(context, "Assign a gateway for every operator: "+strings.Join(missing, ", ")+".")
+		}
+		if gatewayID <= 0 {
+			gatewayID = routes["gp"]
+		}
+	}
 	if gatewayID <= 0 && storedGatewayID.Valid {
 		gatewayID = storedGatewayID.Int64
 	}
@@ -693,23 +738,40 @@ func (server *Server) approveSender(context fiber.Ctx) error {
 		})
 	}
 
-	var gatewayExists int
-	if err := server.db.QueryRow(
-		"SELECT COUNT(*) FROM gateways WHERE id = ? AND deleted_at IS NULL", gatewayID).Scan(&gatewayExists); err != nil {
-		return databaseError(context, err)
+	checked := map[int64]bool{}
+	for _, gwID := range append([]int64{gatewayID}, mapValues(routes)...) {
+		if gwID <= 0 || checked[gwID] {
+			continue
+		}
+		exists, gErr := server.gatewayExistsByID(gwID)
+		if gErr != nil {
+			return databaseError(context, gErr)
+		}
+		if !exists {
+			return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "The selected gateway no longer exists."})
+		}
+		checked[gwID] = true
 	}
-	if gatewayExists == 0 {
-		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "The selected gateway no longer exists."})
+
+	if senderType != "numeric" && len(routes) == 0 {
+		for _, operator := range senderOperators {
+			routes[operator.Key] = gatewayID
+		}
 	}
 
 	admin := superman(context)
 	if _, err := server.db.Exec(`
 		UPDATE senders
-		SET gateway_id = ?, approval_status = 'approved', is_enabled = 1, reviewed_by = ?, reviewed_at = NOW(),
+		SET gateway_id = ?, approval_status = 'approved', is_enabled = TRUE, reviewed_by = ?, reviewed_at = NOW(),
 			rejection_reason = NULL, updated_at = NOW()
 		WHERE id = ? AND deleted_at IS NULL
 	`, gatewayID, admin.AdminID, id); err != nil {
 		return databaseError(context, err)
+	}
+	if senderType != "numeric" {
+		if err := server.saveSenderRoutes(id, routes); err != nil {
+			return databaseError(context, err)
+		}
 	}
 
 	return context.JSON(fiber.Map{"message": fmt.Sprintf("Sender %s is approved and enabled.", senderID)})
@@ -742,7 +804,7 @@ func (server *Server) rejectSender(context fiber.Ctx) error {
 	admin := superman(context)
 	if _, err := server.db.Exec(`
 		UPDATE senders
-		SET approval_status = 'rejected', is_enabled = 0, reviewed_by = ?, reviewed_at = NOW(),
+		SET approval_status = 'rejected', is_enabled = FALSE, reviewed_by = ?, reviewed_at = NOW(),
 			rejection_reason = ?, updated_at = NOW()
 		WHERE id = ? AND deleted_at IS NULL
 	`, admin.AdminID, strings.TrimSpace(payload.Reason), id); err != nil {
@@ -1125,7 +1187,7 @@ func (server *Server) senderResolution(context fiber.Ctx) error {
 		var fallbackID sql.NullInt64
 		var fallbackName, fallbackDriver sql.NullString
 		_ = server.db.QueryRow(`
-			SELECT id, name, driver FROM gateways WHERE deleted_at IS NULL AND is_enabled = 1 ORDER BY id ASC LIMIT 1
+			SELECT id, name, driver FROM gateways WHERE deleted_at IS NULL AND is_enabled = TRUE ORDER BY id ASC LIMIT 1
 		`).Scan(&fallbackID, &fallbackName, &fallbackDriver)
 		gatewayID, gatewayName, gatewayDriver = fallbackID, fallbackName, fallbackDriver
 	}
@@ -1206,7 +1268,7 @@ func (server *Server) senderResolution(context fiber.Ctx) error {
 func (server *Server) activeOperators() ([]operatorRecord, error) {
 	rows, err := server.db.Query(`
 		SELECT id, name, codes, masking_price, non_masking_price
-		FROM operators WHERE is_active = 1 ORDER BY name ASC
+		FROM operators WHERE is_active = TRUE ORDER BY name ASC
 	`)
 	if err != nil {
 		return nil, err

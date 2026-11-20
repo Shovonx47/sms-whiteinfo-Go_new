@@ -2,7 +2,8 @@
 	import { onMount } from 'svelte';
 	import { supermanApi } from '$lib/superman-api.js';
 	import ExportDropdown from '$lib/components/common/ExportDropdown.svelte';
-	import type { ExportColumn } from '$lib/utils/export.js';
+	import Pagination from '$lib/components/common/Pagination.svelte';
+	import { exportToPDF, type ExportColumn } from '$lib/utils/export.js';
 
 	interface TransactionRecord {
 		id: number;
@@ -25,6 +26,12 @@
 		total_tx_count: number;
 	}
 
+	interface ReportResponse {
+		data: TransactionRecord[];
+		meta: { page: number; per_page: number; total: number };
+		summary: ReportSummary;
+	}
+
 	let records = $state<TransactionRecord[]>([]);
 	let summary = $state<ReportSummary>({
 		total_credits: 0,
@@ -34,6 +41,11 @@
 	});
 
 	let loading = $state(true);
+	let generating = $state(false);
+	let loadError = $state<string | null>(null);
+	let notice = $state<{ type: 'success' | 'error'; text: string } | null>(null);
+	let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+
 	let search = $state('');
 	let directionFilter = $state('all');
 	let fromDate = $state('');
@@ -41,54 +53,150 @@
 
 	// Pagination
 	let currentPage = $state(1);
-	let perPage = $state(25);
+	let perPage = $state(10);
 	let totalRecords = $state(0);
-	let totalPages = $derived(Math.ceil(totalRecords / perPage) || 1);
+
+	let requestSeq = 0;
+
+	function showNotice(type: 'success' | 'error', text: string) {
+		notice = { type, text };
+		clearTimeout(noticeTimer);
+		noticeTimer = setTimeout(() => (notice = null), 6000);
+	}
+
+	function filterQuery(): URLSearchParams {
+		const query = new URLSearchParams();
+		if (search.trim()) query.set('search', search.trim());
+		if (directionFilter !== 'all') query.set('direction', directionFilter);
+		if (fromDate) query.set('from', fromDate);
+		if (untilDate) query.set('until', untilDate);
+		return query;
+	}
+
+	function dateRangeError(): string | null {
+		if (fromDate && untilDate && fromDate > untilDate) {
+			return 'The "from" date must be on or before the "to" date.';
+		}
+		return null;
+	}
 
 	async function loadReports() {
-		loading = true;
-		try {
-			const query = new URLSearchParams({
-				page: String(currentPage),
-				per_page: String(perPage)
-			});
-			if (search) query.set('search', search);
-			if (directionFilter !== 'all') query.set('direction', directionFilter);
-			if (fromDate) query.set('from', fromDate);
-			if (untilDate) query.set('until', untilDate);
+		const invalid = dateRangeError();
+		if (invalid) {
+			loadError = invalid;
+			return;
+		}
 
-			const res = await supermanApi.get<{
-				data: TransactionRecord[];
-				meta: { page: number; per_page: number; total: number };
-				summary: ReportSummary;
-			}>(`/api/v1/superman/billing/reports?${query.toString()}`);
+		const seq = ++requestSeq;
+		loading = true;
+		loadError = null;
+		try {
+			const query = filterQuery();
+			query.set('page', String(currentPage));
+			query.set('per_page', String(perPage));
+
+			const res = await supermanApi.get<ReportResponse>(`/api/v1/superman/billing/reports?${query.toString()}`);
+			if (seq !== requestSeq) return;
 
 			records = res.data || [];
 			totalRecords = res.meta?.total || 0;
-			if (res.summary) {
-				summary = res.summary;
-			}
+			if (res.summary) summary = res.summary;
 		} catch (err) {
-			console.error('Failed to load billing reports:', err);
+			if (seq !== requestSeq) return;
+			loadError = err instanceof Error ? err.message : 'Failed to load billing reports.';
 		} finally {
-			loading = false;
+			if (seq === requestSeq) loading = false;
+		}
+	}
+
+	function applyFilters() {
+		currentPage = 1;
+		void loadReports();
+	}
+
+	function goToPage(page: number) {
+		currentPage = page;
+		void loadReports();
+	}
+
+	function changePerPage(size: number) {
+		perPage = size;
+		currentPage = 1;
+		void loadReports();
+	}
+
+	async function fetchAllRecords(): Promise<ReportResponse> {
+		const query = filterQuery();
+		query.set('export', '1');
+		return supermanApi.get<ReportResponse>(`/api/v1/superman/billing/reports?${query.toString()}`);
+	}
+
+	function filterSummaryText(): string {
+		const parts: string[] = [];
+		if (search.trim()) parts.push(`search "${search.trim()}"`);
+		if (directionFilter !== 'all') parts.push(directionFilter === 'credit' ? 'credits only' : 'debits only');
+		if (fromDate || untilDate) parts.push(`period ${fromDate || 'beginning'} to ${untilDate || 'today'}`);
+		return parts.length > 0 ? parts.join(', ') : 'none (all movements)';
+	}
+
+	function formatBdt(val: number): string {
+		return 'BDT ' + (val || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+	}
+
+	/** Builds the full audit report for the current filters and downloads it as a PDF. */
+	async function generateReport() {
+		if (generating) return;
+		const invalid = dateRangeError();
+		if (invalid) {
+			showNotice('error', invalid);
+			return;
+		}
+
+		generating = true;
+		notice = null;
+		try {
+			const res = await fetchAllRecords();
+			const rows = res.data || [];
+			if (rows.length === 0) {
+				showNotice('error', 'No transactions match the selected filters, so there is nothing to report.');
+				return;
+			}
+
+			const totals = res.summary ?? summary;
+			exportToPDF(exportColumns, rows, {
+				title: 'Financial & Billing Audit Report',
+				filterSummary: filterSummaryText(),
+				summary: [
+					{ label: 'Total credits', value: `+${formatBdt(totals.total_credits)}` },
+					{ label: 'Total debits', value: `-${formatBdt(totals.total_debits)}` },
+					{ label: 'Net movement', value: formatBdt(totals.net_flow) },
+					{ label: 'Transactions', value: totals.total_tx_count.toLocaleString() }
+				]
+			});
+
+			showNotice('success', `Report generated: ${rows.length.toLocaleString()} transactions downloaded as PDF.`);
+			void loadReports();
+		} catch (err) {
+			showNotice('error', err instanceof Error ? err.message : 'Unable to generate the report.');
+		} finally {
+			generating = false;
 		}
 	}
 
 	const exportColumns: ExportColumn<TransactionRecord>[] = [
-		{ header: 'TX ID', getValue: (r) => r.id },
+		{ header: 'TX ID', getValue: (r) => `#${r.id}` },
 		{ header: 'Date', getValue: (r) => r.created_at },
 		{ header: 'Customer', getValue: (r) => r.customer_name },
-		{ header: 'Phone', getValue: (r) => r.customer_phone },
-		{ header: 'Type', getValue: (r) => r.direction },
-		{ header: 'Amount', getValue: (r) => `BDT ${r.amount.toFixed(2)}` },
-		{ header: 'Balance Before', getValue: (r) => `BDT ${r.balance_before.toFixed(2)}` },
-		{ header: 'Balance After', getValue: (r) => `BDT ${r.balance_after.toFixed(2)}` },
+		{ header: 'Phone', getValue: (r) => r.customer_phone || '—' },
+		{ header: 'Type', getValue: (r) => (r.direction === 'credit' ? 'Credit' : 'Debit') },
+		{ header: 'Amount', getValue: (r) => `${r.direction === 'credit' ? '+' : '-'}${formatBdt(r.amount)}` },
+		{ header: 'Balance Before', getValue: (r) => formatBdt(r.balance_before) },
+		{ header: 'Balance After', getValue: (r) => formatBdt(r.balance_after) },
 		{ header: 'Description', getValue: (r) => r.description || '—' }
 	];
 
 	onMount(() => {
-		loadReports();
+		void loadReports();
 	});
 
 	function formatCurrency(val: number): string {
@@ -123,8 +231,8 @@
 			<ExportDropdown
 				title="Financial and Billing Audit Reports"
 				columns={exportColumns}
-				getData={() => records}
-				disabled={records.length === 0}
+				getData={async () => (await fetchAllRecords()).data || []}
+				disabled={totalRecords === 0}
 			/>
 			<a
 				href="/superman/billing"
@@ -167,9 +275,22 @@
 		</div>
 	</div>
 
+	{#if notice}
+		<div
+			role="status"
+			data-testid="report-notice"
+			class="flex items-center justify-between rounded-lg border px-4 py-3 text-xs font-medium {notice.type === 'success'
+				? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300'
+				: 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300'}"
+		>
+			<span>{notice.text}</span>
+			<button type="button" onclick={() => (notice = null)} class="ml-4 text-base leading-none opacity-60 hover:opacity-100" aria-label="Dismiss">×</button>
+		</div>
+	{/if}
+
 	<!-- Filter Controls -->
-	<div class="flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-3 shadow-xs dark:border-gray-800 dark:bg-gray-900 sm:flex-row sm:items-center sm:justify-between">
-		<div class="relative flex-1 max-w-sm">
+	<div class="flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-3 shadow-xs dark:border-gray-800 dark:bg-gray-900 lg:flex-row lg:items-center lg:justify-between">
+		<div class="relative max-w-sm flex-1">
 			<svg class="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
 			</svg>
@@ -177,10 +298,7 @@
 				type="text"
 				bind:value={search}
 				onkeydown={(e) => {
-					if (e.key === 'Enter') {
-						currentPage = 1;
-						loadReports();
-					}
+					if (e.key === 'Enter') applyFilters();
 				}}
 				placeholder="Search customer, note, phone… (Enter)"
 				class="w-full rounded-lg border border-gray-200 bg-gray-50 py-1.5 pl-9 pr-3 text-xs text-gray-900 focus:border-emerald-500 focus:bg-white focus:outline-hidden dark:border-gray-800 dark:bg-gray-800 dark:text-white"
@@ -188,9 +306,10 @@
 		</div>
 
 		<div class="flex flex-wrap items-center gap-2">
-			<!-- Direction Filter -->
 			<select
 				bind:value={directionFilter}
+				onchange={applyFilters}
+				aria-label="Movement type"
 				class="rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-700 focus:border-emerald-500 focus:outline-hidden dark:border-gray-800 dark:bg-gray-800 dark:text-gray-300"
 			>
 				<option value="all">All Movements</option>
@@ -198,31 +317,44 @@
 				<option value="debit">Debit Only (-)</option>
 			</select>
 
-			<!-- Date Range -->
 			<input
 				type="date"
 				bind:value={fromDate}
+				onchange={applyFilters}
+				aria-label="From date"
 				class="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs font-mono text-gray-700 focus:border-emerald-500 focus:outline-hidden dark:border-gray-800 dark:bg-gray-800 dark:text-gray-300"
 			/>
 			<span class="text-xs text-gray-400">to</span>
 			<input
 				type="date"
 				bind:value={untilDate}
+				onchange={applyFilters}
+				aria-label="To date"
 				class="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs font-mono text-gray-700 focus:border-emerald-500 focus:outline-hidden dark:border-gray-800 dark:bg-gray-800 dark:text-gray-300"
 			/>
 
 			<button
 				type="button"
-				onclick={() => {
-					currentPage = 1;
-					loadReports();
-				}}
-				class="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gray-800 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-100"
+				onclick={() => void generateReport()}
+				disabled={generating}
+				data-testid="generate-report"
+				class="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-gray-800 disabled:cursor-wait disabled:opacity-70 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-100"
 			>
-				Generate Report
+				{#if generating}
+					<svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+					Generating…
+				{:else}
+					Generate Report
+				{/if}
 			</button>
 		</div>
 	</div>
+
+	{#if loadError}
+		<div class="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
+			{loadError}
+		</div>
+	{/if}
 
 	<!-- Report Table -->
 	<div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xs dark:border-gray-800 dark:bg-gray-900">
@@ -278,41 +410,13 @@
 			</table>
 		</div>
 
-		<!-- Pagination -->
-		{#if totalPages > 1}
-			<div class="flex items-center justify-between border-t border-gray-100 px-4 py-3 dark:border-gray-800">
-				<p class="text-xs text-gray-500">
-					Page <strong class="font-semibold text-gray-900 dark:text-white">{currentPage}</strong> of <strong class="font-semibold text-gray-900 dark:text-white">{totalPages}</strong>
-				</p>
-				<div class="flex items-center gap-1.5">
-					<button
-						type="button"
-						onclick={() => {
-							if (currentPage > 1) {
-								currentPage--;
-								loadReports();
-							}
-						}}
-						disabled={currentPage <= 1}
-						class="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-					>
-						Previous
-					</button>
-					<button
-						type="button"
-						onclick={() => {
-							if (currentPage < totalPages) {
-								currentPage++;
-								loadReports();
-							}
-						}}
-						disabled={currentPage >= totalPages}
-						class="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-					>
-						Next
-					</button>
-				</div>
-			</div>
-		{/if}
+		<Pagination
+			total={totalRecords}
+			page={currentPage}
+			{perPage}
+			{loading}
+			onPageChange={goToPage}
+			onPerPageChange={changePerPage}
+		/>
 	</div>
-</div>
+</div>\n

@@ -26,7 +26,7 @@
 </script>
 
 {#if adminAuth.initialized && adminAuth.isLoggedIn}
-	<div class="flex h-screen overflow-hidden bg-gray-50 text-gray-900 transition-colors dark:bg-gray-950 dark:text-gray-100">
+	<div class="fixed inset-0 flex overflow-hidden bg-gray-50 text-gray-900 transition-colors dark:bg-gray-950 dark:text-gray-100">
 		<AdminSidebar bind:collapsed={sidebarCollapsed} />
 
 		<div class="flex min-w-0 flex-1 flex-col overflow-hidden">

@@ -44,6 +44,7 @@ export const blankSupermanPages: Record<string, string> = {
 	'monitoring/provider-health': 'Provider Health',
 	'monitoring/queue-health': 'Queue Health',
 	'monitoring/tps': 'TPS Monitor',
+	'payment-gateways/gateways': 'Global Payment Gateways',
 	'payment-gateways/reconciliation': 'Reconciliation',
 	'payment-gateways/reports': 'Payment Reports',
 	'payment-gateways/transactions': 'Payment Transactions',
@@ -138,6 +139,45 @@ const messageColumns: SupermanTablePage['columns'] = [
 ];
 
 export const tableSupermanPages: Record<string, SupermanTablePage> = {
+	'employees/list': {
+		title: 'Staff Members',
+		description: 'System administrators and support staff accounts.',
+		endpoint: '/api/v1/superman/employees',
+		columns: [
+			{ key: 'id', label: 'ID' },
+			{ key: 'name', label: 'Name' },
+			{ key: 'email', label: 'Email' },
+			{ key: 'phone', label: 'Phone' },
+			{ key: 'role', label: 'Role' },
+			{ key: 'status', label: 'Status' },
+			{ key: 'created_at', label: 'Created', format: 'date' }
+		]
+	},
+	'roles-permissions/roles': {
+		title: 'Roles',
+		description: 'Administrative roles and access profiles.',
+		endpoint: '/api/v1/superman/roles',
+		columns: [
+			{ key: 'id', label: 'ID' },
+			{ key: 'name', label: 'Role Name' },
+			{ key: 'description', label: 'Description' },
+			{ key: 'created_at', label: 'Created', format: 'date' }
+		]
+	},
+	'campaigns/list': {
+		title: 'Campaigns List',
+		description: 'Scheduled and executed bulk marketing SMS campaigns.',
+		endpoint: '/api/v1/superman/batches?per_page=100',
+		columns: [
+			{ key: 'customer', label: 'Customer' },
+			{ key: 'sender_id', label: 'Sender ID' },
+			{ key: 'source', label: 'Source' },
+			{ key: 'status', label: 'Status' },
+			{ key: 'total_recipients', label: 'Recipients' },
+			{ key: 'progress_percent', label: 'Progress' },
+			{ key: 'created_at', label: 'Created', format: 'date' }
+		]
+	},
 	'finance/transactions': {
 		title: 'Transactions',
 		description: 'Customer account debit and credit transactions.',

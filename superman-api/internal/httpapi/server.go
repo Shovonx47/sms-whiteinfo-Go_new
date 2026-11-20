@@ -24,11 +24,14 @@ type Server struct {
 }
 
 func New(config config.Config, database *sql.DB) *Server {
-	return &Server{
+	server := &Server{
 		config: config,
 		db:     database,
 		tokens: auth.NewTokenManager(config.JWTSecret),
 	}
+	server.ensureSenderRouteTable()
+
+	return server
 }
 
 func (server *Server) App() *fiber.App {
@@ -60,8 +63,14 @@ func (server *Server) App() *fiber.App {
 		return c.Next()
 	})
 
+	origins := []string{"http://localhost:5173", "http://127.0.0.1:5173"}
+	for _, o := range strings.Split(server.config.FrontendOrigin, ",") {
+		if tr := strings.TrimSpace(o); tr != "" {
+			origins = append(origins, tr)
+		}
+	}
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{server.config.FrontendOrigin},
+		AllowOrigins:     origins,
 		AllowHeaders:     []string{"Authorization", "Content-Type"},
 		AllowMethods:     []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
 		AllowCredentials: true,
@@ -86,9 +95,31 @@ func (server *Server) App() *fiber.App {
 	protected.Get("/customers", server.customers)
 	protected.Get("/transactions", server.transactions)
 	protected.Get("/messages", server.messages)
+	protected.Get("/campaigns", server.campaigns)
+	protected.Post("/campaigns", server.createCampaign)
+	protected.Get("/alerts/dashboard", server.alertsDashboard)
+	protected.Get("/alerts/providers", server.alertProviders)
+	protected.Post("/alerts/providers/:id/restore", server.restoreProvider)
+	protected.Get("/dlr/live", server.dlrLive)
+	protected.Get("/dlr/queue", server.dlrQueue)
+	protected.Get("/dlr/retry", server.dlrRetry)
+	protected.Get("/dlr/logs", server.dlrLogs)
+	protected.Get("/dlr/check", server.dlrCheck)
+	protected.Post("/dlr/:id/recheck", server.recheckDlr)
+	protected.Post("/messages/:id/requeue", server.requeueMessage)
+	protected.Get("/sms/logs", server.smsAuditLogs)
+	protected.Get("/sms/inquiry", server.smsInquiry)
+	protected.Get("/sms/senders", server.smsSenderOptions)
+	protected.Post("/sms/send", server.adminSendSMS)
 	protected.Get("/batches", server.batches)
+	protected.Post("/batches/:id/approve", server.approveBatch)
+	protected.Post("/batches/:id/reject", server.rejectBatch)
+	protected.Post("/batches/:id/pause", server.pauseBatch)
+	protected.Post("/batches/:id/resume", server.resumeBatch)
+	protected.Delete("/batches/:id", server.deleteScheduledBatch)
 	protected.Get("/gateways", server.gateways)
 	protected.Post("/gateways", server.createGateway)
+	protected.Post("/gateways/bulk", server.bulkGateways)
 	protected.Get("/gateways/:id", server.gatewayDetail)
 	protected.Put("/gateways/:id", server.updateGateway)
 	protected.Delete("/gateways/:id", server.deleteGateway)
@@ -108,6 +139,9 @@ func (server *Server) App() *fiber.App {
 	protected.Get("/kyc/permissions", server.kycPermissions)
 	protected.Put("/kyc/permissions/:id", server.updateKYCPermissions)
 	protected.Get("/deposits", server.deposits)
+	protected.Get("/deposits/finance-report", server.depositFinanceReport)
+	protected.Get("/deposits/:id", server.depositDetail)
+	protected.Put("/deposits/:id", server.updateDeposit)
 	protected.Get("/ip-whitelist-requests", server.ipWhitelistRequests)
 	protected.Post("/ip-whitelist-requests/:id/approve", server.approveIPWhitelist)
 	protected.Post("/ip-whitelist-requests/:id/reject", server.rejectIPWhitelist)
@@ -152,6 +186,8 @@ func (server *Server) App() *fiber.App {
 	protected.Put("/sps/:id/status", server.updateSPStatus)
 	protected.Get("/senders", server.senders)
 	protected.Post("/senders", server.createSender)
+	protected.Post("/senders/import", server.importSenders)
+	protected.Post("/senders/bulk-delete", server.deleteSenders)
 	protected.Delete("/senders", server.deleteSenders)
 	protected.Get("/senders/:id", server.senderDetail)
 	protected.Put("/senders/:id", server.updateSender)
@@ -195,6 +231,7 @@ func (server *Server) App() *fiber.App {
 	// Analytics endpoints
 	protected.Get("/analytics/cost-profit", server.analyticsCostProfit)
 	protected.Get("/analytics/messaging", server.analyticsMessaging)
+	protected.Get("/analytics/financial", server.analyticsFinancial)
 
 	// Operational endpoints (Providers, Reports, Health, Routing, Audit)
 	protected.Get("/providers/health", server.providerHealth)
@@ -204,9 +241,27 @@ func (server *Server) App() *fiber.App {
 	protected.Get("/providers/error-mapping", server.errorMappings)
 	protected.Get("/reports/executive", server.reportsExecutive)
 	protected.Get("/templates", server.templates)
+	protected.Get("/templates/options", server.templateOptions)
+	protected.Post("/templates", server.createTemplate)
+	protected.Post("/templates/bulk", server.bulkTemplates)
+	protected.Get("/templates/:id", server.templateDetail)
+	protected.Put("/templates/:id", server.updateTemplate)
+	protected.Delete("/templates/:id", server.deleteTemplate)
 	protected.Post("/templates/:id/approve", server.approveTemplate)
 	protected.Post("/templates/:id/reject", server.rejectTemplate)
 	protected.Get("/contacts", server.contacts)
+	protected.Post("/contacts", server.createContact)
+	protected.Post("/contacts/bulk", server.bulkContacts)
+	protected.Put("/contacts/:id", server.updateContact)
+	protected.Delete("/contacts/:id", server.deleteContact)
+	protected.Get("/contact-groups", server.contactGroups)
+	protected.Post("/contact-groups", server.createContactGroup)
+	protected.Post("/contact-groups/bulk", server.bulkContactGroups)
+	protected.Put("/contact-groups/:id", server.updateContactGroup)
+	protected.Delete("/contact-groups/:id", server.deleteContactGroup)
+	protected.Get("/contact-owners", server.contactOwners)
+	protected.Get("/employees", server.adminEmployees)
+	protected.Get("/roles", server.adminRoles)
 	protected.Get("/monitoring/system-health", server.monitoringSystemHealth)
 	protected.Get("/audit-logs/global", server.auditLogsGlobal)
 	protected.Get("/routing/dashboard", server.routingDashboard)

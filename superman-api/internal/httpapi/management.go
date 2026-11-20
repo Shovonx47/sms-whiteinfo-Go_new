@@ -138,40 +138,76 @@ func (server *Server) customerDetail(context fiber.Ctx) error {
 		return context.Status(http.StatusNotFound).JSON(fiber.Map{"message": "Customer not found."})
 	}
 
-	var c customer
-	var companyName, nidNumber, frontNid, backNid, livePhoto, businessAddress, tradeLicenseNum, tradeLicenseFile sql.NullString
-	var kycSubmittedAt, kycVerifiedAt sql.NullTime
-	var createdAt time.Time
-	var apiAccess, smsAutoApproved int
-	var tariffName sql.NullString
-	var tariffPlanID sql.NullInt64
+	columns := tableColumns(server, "users")
+	if len(columns) == 0 {
+		return databaseError(context, fmt.Errorf("users table is not readable"))
+	}
 
-	err = server.db.QueryRow(`
-		SELECT u.id, u.name, u.email, u.phone, u.business_name, u.company_name, u.balance, u.kyc_status, u.status,
-			u.nid_number, u.front_nid, u.back_nid, u.live_photo, u.business_address, u.trade_license_number, u.trade_license_file,
-			u.kyc_submitted_at, u.kyc_verified_at, COALESCE(u.api_access, 0), COALESCE(u.sms_auto_approved, 0), u.created_at,
-			(SELECT tp.name FROM tariff_plan_assignments tpa JOIN tariff_plans tp ON tp.id = tpa.tariff_plan_id WHERE tpa.user_id = u.id AND tpa.status = 'active' LIMIT 1) AS tariff_name,
-			(SELECT tpa.tariff_plan_id FROM tariff_plan_assignments tpa WHERE tpa.user_id = u.id AND tpa.status = 'active' LIMIT 1) AS tariff_plan_id
+	// Optional schema stays NULL on an older database so the profile still loads.
+	tariffNameExpr, tariffPlanIDExpr := "NULL", "NULL"
+	if tableExists(server, "tariff_plan_assignments") && tableExists(server, "tariff_plans") {
+		tariffNameExpr = "(SELECT tp.name FROM tariff_plan_assignments tpa JOIN tariff_plans tp ON tp.id = tpa.tariff_plan_id WHERE tpa.user_id = u.id AND tpa.status = 'active' LIMIT 1)"
+		tariffPlanIDExpr = "(SELECT tpa.tariff_plan_id FROM tariff_plan_assignments tpa WHERE tpa.user_id = u.id AND tpa.status = 'active' LIMIT 1)"
+	}
+
+	query := `
+		SELECT u.id, COALESCE(u.name, ''), COALESCE(u.email, ''), COALESCE(u.phone, ''),
+			` + textColumn(columns, "u", "business_name") + `,
+			` + textColumn(columns, "u", "company_name") + `,
+			COALESCE(u.balance, 0), COALESCE(u.kyc_status, 'pending'), COALESCE(u.status, 'approved'),
+			` + textColumn(columns, "u", "nid_number") + `,
+			` + textColumn(columns, "u", "front_nid") + `,
+			` + textColumn(columns, "u", "back_nid") + `,
+			` + textColumn(columns, "u", "live_photo") + `,
+			` + textColumn(columns, "u", "business_address") + `,
+			` + textColumn(columns, "u", "trade_license_number") + `,
+			` + textColumn(columns, "u", "trade_license_file") + `,
+			` + textColumn(columns, "u", "kyc_submitted_at") + `,
+			` + textColumn(columns, "u", "kyc_verified_at") + `,
+			` + flagColumn(columns, "u", "api_access") + `,
+			` + flagColumn(columns, "u", "sms_auto_approved") + `,
+			u.created_at,
+			` + textColumn(columns, "u", "last_login_at") + `,
+			` + textColumn(columns, "u", "email_verified_at") + `,
+			` + textColumn(columns, "u", "phone_verified_at") + `,
+			` + flagColumn(columns, "u", "created_by_admin") + `,
+			` + flagColumn(columns, "u", "created_by_sp") + `,
+			` + textColumn(columns, "u", "kyc_rejected_reason") + `,
+			` + tariffNameExpr + `,
+			` + tariffPlanIDExpr + `
 		FROM users u
 		WHERE u.id = ? AND u.type = 'customer' AND u.deleted_at IS NULL
-	`, id).Scan(
-		&c.ID, &c.Name, &c.Email, &c.Phone, &c.BusinessName, &companyName, &c.Balance, &c.KYCStatus, &c.Status,
+	`
+
+	var c customer
+	var businessName, companyName, nidNumber, frontNid, backNid, livePhoto sql.NullString
+	var businessAddress, tradeLicenseNum, tradeLicenseFile, kycRejectedReason, tariffName sql.NullString
+	var kycSubmittedAt, kycVerifiedAt, lastLoginAt, emailVerifiedAt, phoneVerifiedAt, createdAt sql.NullTime
+	var apiAccess, smsAutoApproved, createdByAdmin, createdBySP int
+	var tariffPlanID sql.NullInt64
+
+	err = server.db.QueryRow(query, id).Scan(
+		&c.ID, &c.Name, &c.Email, &c.Phone, &businessName, &companyName, &c.Balance, &c.KYCStatus, &c.Status,
 		&nidNumber, &frontNid, &backNid, &livePhoto, &businessAddress, &tradeLicenseNum, &tradeLicenseFile,
 		&kycSubmittedAt, &kycVerifiedAt, &apiAccess, &smsAutoApproved, &createdAt,
+		&lastLoginAt, &emailVerifiedAt, &phoneVerifiedAt, &createdByAdmin, &createdBySP, &kycRejectedReason,
 		&tariffName, &tariffPlanID,
 	)
 	if err != nil {
 		return databaseError(context, err)
 	}
 
-	c.CreatedAt = createdAt.Format(time.RFC3339)
-	if nidNumber.Valid && nidNumber.String != "" {
-		val := nidNumber.String
-		c.NIDNumber = &val
+	c.BusinessName = nullStringVal(businessName)
+	c.NIDNumber = nullStringVal(nidNumber)
+	c.Tariff = nullStringVal(tariffName)
+	c.LastLoginAt = nil
+	if lastLoginAt.Valid {
+		value := lastLoginAt.Time.Format("Jan 02, 2006 03:04 PM")
+		c.LastLoginAt = &value
 	}
-	if tariffName.Valid && tariffName.String != "" {
-		val := tariffName.String
-		c.Tariff = &val
+	c.CreatedByAdmin = createdByAdmin == 1
+	if createdAt.Valid {
+		c.CreatedAt = createdAt.Time.Format(time.RFC3339)
 	}
 
 	// Fetch assigned Senders
@@ -182,20 +218,22 @@ func (server *Server) customerDetail(context fiber.Ctx) error {
 		GatewayName string `json:"gateway_name"`
 	}
 	senders := make([]senderItem, 0)
-	sRows, err := server.db.Query(`
-		SELECT s.id, s.sender_id, s.type, COALESCE(g.name, 'No Provider')
-		FROM sender_user su
-		JOIN senders s ON s.id = su.sender_id
-		LEFT JOIN gateways g ON g.id = s.gateway_id
-		WHERE su.user_id = ?
-		ORDER BY s.sender_id ASC
-	`, id)
-	if err == nil {
-		defer sRows.Close()
-		for sRows.Next() {
-			var si senderItem
-			if err := sRows.Scan(&si.ID, &si.SenderID, &si.Type, &si.GatewayName); err == nil {
-				senders = append(senders, si)
+	if tableExists(server, "sender_user") && tableExists(server, "senders") {
+		sRows, err := server.db.Query(`
+			SELECT s.id, s.sender_id, s.type, COALESCE(g.name, 'No Provider')
+			FROM sender_user su
+			JOIN senders s ON s.id = su.sender_id
+			LEFT JOIN gateways g ON g.id = s.gateway_id
+			WHERE su.user_id = ?
+			ORDER BY s.sender_id ASC
+		`, id)
+		if err == nil {
+			defer sRows.Close()
+			for sRows.Next() {
+				var si senderItem
+				if err := sRows.Scan(&si.ID, &si.SenderID, &si.Type, &si.GatewayName); err == nil {
+					senders = append(senders, si)
+				}
 			}
 		}
 	}
@@ -207,18 +245,25 @@ func (server *Server) customerDetail(context fiber.Ctx) error {
 		Status    string `json:"status"`
 	}
 	ipWhitelists := make([]ipItem, 0)
-	ipRows, err := server.db.Query(`
-		SELECT id, ip_address, status
-		FROM ip_whitelist_requests
-		WHERE user_id = ? AND status = 'approved'
-		ORDER BY id DESC
-	`, id)
-	if err == nil {
-		defer ipRows.Close()
-		for ipRows.Next() {
-			var ip ipItem
-			if err := ipRows.Scan(&ip.ID, &ip.IPAddress, &ip.Status); err == nil {
-				ipWhitelists = append(ipWhitelists, ip)
+	if tableExists(server, "ip_whitelist_requests") {
+		ipColumns := tableColumns(server, "ip_whitelist_requests")
+		statusExpr := textColumn(ipColumns, "", "status")
+		if statusExpr != "NULL" {
+			statusExpr = "ip_whitelist_requests.status"
+		}
+		query := "SELECT id, ip_address, COALESCE(" + statusExpr + ", '') FROM ip_whitelist_requests WHERE user_id = ?"
+		if ipColumns["status"] {
+			query += " AND status = 'approved'"
+		}
+		query += " ORDER BY id DESC"
+		ipRows, err := server.db.Query(query, id)
+		if err == nil {
+			defer ipRows.Close()
+			for ipRows.Next() {
+				var ip ipItem
+				if err := ipRows.Scan(&ip.ID, &ip.IPAddress, &ip.Status); err == nil {
+					ipWhitelists = append(ipWhitelists, ip)
+				}
 			}
 		}
 	}
@@ -234,21 +279,25 @@ func (server *Server) customerDetail(context fiber.Ctx) error {
 		CreatedAt     string  `json:"created_at"`
 	}
 	recentTx := make([]txItem, 0)
-	txRows, err := server.db.Query(`
-		SELECT id, amount, direction, balance_before, balance_after, description, created_at
-		FROM transactions
-		WHERE user_id = ?
-		ORDER BY id DESC
-		LIMIT 10
-	`, id)
-	if err == nil {
-		defer txRows.Close()
-		for txRows.Next() {
-			var tx txItem
-			var cat time.Time
-			if err := txRows.Scan(&tx.ID, &tx.Amount, &tx.Direction, &tx.BalanceBefore, &tx.BalanceAfter, &tx.Description, &cat); err == nil {
-				tx.CreatedAt = cat.Format(time.RFC3339)
-				recentTx = append(recentTx, tx)
+	if tableExists(server, "transactions") {
+		txRows, err := server.db.Query(`
+			SELECT id, amount, direction, balance_before, balance_after, description, created_at
+			FROM transactions
+			WHERE user_id = ?
+			ORDER BY id DESC
+			LIMIT 10
+		`, id)
+		if err == nil {
+			defer txRows.Close()
+			for txRows.Next() {
+				var tx txItem
+				var cat sql.NullTime
+				if err := txRows.Scan(&tx.ID, &tx.Amount, &tx.Direction, &tx.BalanceBefore, &tx.BalanceAfter, &tx.Description, &cat); err == nil {
+					if cat.Valid {
+						tx.CreatedAt = cat.Time.Format(time.RFC3339)
+					}
+					recentTx = append(recentTx, tx)
+				}
 			}
 		}
 	}
@@ -259,25 +308,40 @@ func (server *Server) customerDetail(context fiber.Ctx) error {
 		tariffID = &val
 	}
 
+	registrationSource := "Self-Registered"
+	if createdByAdmin == 1 {
+		registrationSource = "Created by Super Admin"
+	} else if createdBySP == 1 {
+		registrationSource = "Created by SP Reseller"
+	}
+
 	return context.JSON(fiber.Map{
 		"data": fiber.Map{
-			"customer":             c,
-			"company_name":         nullStringVal(companyName),
-			"nid_number":           nullStringVal(nidNumber),
-			"front_nid":            nullStringVal(frontNid),
-			"back_nid":             nullStringVal(backNid),
-			"live_photo":           nullStringVal(livePhoto),
-			"business_address":     nullStringVal(businessAddress),
-			"trade_license_number": nullStringVal(tradeLicenseNum),
-			"trade_license_file":   nullStringVal(tradeLicenseFile),
-			"kyc_submitted_at":     nullTimeVal(kycSubmittedAt),
-			"kyc_verified_at":      nullTimeVal(kycVerifiedAt),
-			"api_access":           apiAccess == 1,
-			"sms_auto_approved":    smsAutoApproved == 1,
-			"tariff_plan_id":       tariffID,
-			"senders":              senders,
-			"ip_whitelists":        ipWhitelists,
-			"recent_transactions":  recentTx,
+			"customer":                c,
+			"company_name":            nullStringVal(companyName),
+			"nid_number":              nullStringVal(nidNumber),
+			"front_nid":               nullStringVal(frontNid),
+			"back_nid":                nullStringVal(backNid),
+			"live_photo":              nullStringVal(livePhoto),
+			"business_address":        nullStringVal(businessAddress),
+			"trade_license_number":    nullStringVal(tradeLicenseNum),
+			"trade_license_file":      nullStringVal(tradeLicenseFile),
+			"trade_license_submitted": tradeLicenseFile.Valid && tradeLicenseFile.String != "",
+			"kyc_submitted_at":        nullTimeVal(kycSubmittedAt),
+			"kyc_verified_at":         nullTimeVal(kycVerifiedAt),
+			"kyc_rejected_reason":     nullStringVal(kycRejectedReason),
+			"email_verified_at":       nullTimeVal(emailVerifiedAt),
+			"phone_verified_at":       nullTimeVal(phoneVerifiedAt),
+			"last_login_at":           nullTimeVal(lastLoginAt),
+			"created_by_admin":        createdByAdmin == 1,
+			"created_by_sp":           createdBySP == 1,
+			"registration_source":     registrationSource,
+			"api_access":              apiAccess == 1,
+			"sms_auto_approved":       smsAutoApproved == 1,
+			"tariff_plan_id":          tariffID,
+			"senders":                 senders,
+			"ip_whitelists":           ipWhitelists,
+			"recent_transactions":     recentTx,
 		},
 	})
 }
@@ -358,20 +422,24 @@ type spSummary struct {
 }
 
 type spReseller struct {
-	ID            int64   `json:"id"`
-	Name          string  `json:"name"`
-	Email         string  `json:"email"`
-	Phone         string  `json:"phone"`
-	BusinessName  *string `json:"business_name"`
-	Balance       float64 `json:"balance"`
-	Status        string  `json:"status"`
-	WholesalePlan *string `json:"wholesale_plan"`
-	CustomerCount int     `json:"customer_count"`
-	CreatedAt     string  `json:"created_at"`
+	ID                    int64   `json:"id"`
+	Name                  string  `json:"name"`
+	Email                 string  `json:"email"`
+	Phone                 string  `json:"phone"`
+	BusinessName          *string `json:"business_name"`
+	Balance               float64 `json:"balance"`
+	Status                string  `json:"status"`
+	WholesalePlan         *string `json:"wholesale_plan"`
+	CustomerCount         int     `json:"customer_count"`
+	CommissionDistributed float64 `json:"commission_distributed"`
+	CreatedAt             string  `json:"created_at"`
 }
 
 func (server *Server) sps(context fiber.Ctx) error {
 	page, perPage := pagination(context)
+	if context.Query("export") == "1" {
+		page, perPage = 1, 20000
+	}
 	search := strings.TrimSpace(context.Query("search"))
 	status := strings.TrimSpace(context.Query("status"))
 	arguments := []any{"sp"}
@@ -419,6 +487,7 @@ func (server *Server) sps(context fiber.Ctx) error {
 	rows, err := server.db.Query(`
 		SELECT u.id, u.name, u.email, u.phone, u.business_name, u.balance, u.status,
 			(SELECT COUNT(*) FROM users c WHERE c.sp_id = u.id AND c.deleted_at IS NULL) as customer_count,
+			(SELECT COALESCE(SUM(d.amount), 0) FROM sp_distributions d WHERE d.sp_id = u.id) as commission_distributed,
 			(SELECT tp.name FROM tariff_plan_assignments tpa JOIN tariff_plans tp ON tp.id = tpa.tariff_plan_id WHERE tpa.user_id = u.id AND tpa.status = 'active' LIMIT 1) as wholesale_plan,
 			u.created_at
 		FROM users u `+where+`
@@ -435,7 +504,7 @@ func (server *Server) sps(context fiber.Ctx) error {
 		var item spReseller
 		var wholesalePlan sql.NullString
 		var createdAt time.Time
-		if err := rows.Scan(&item.ID, &item.Name, &item.Email, &item.Phone, &item.BusinessName, &item.Balance, &item.Status, &item.CustomerCount, &wholesalePlan, &createdAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Email, &item.Phone, &item.BusinessName, &item.Balance, &item.Status, &item.CustomerCount, &item.CommissionDistributed, &wholesalePlan, &createdAt); err != nil {
 			return databaseError(context, err)
 		}
 		item.CreatedAt = createdAt.Format(time.RFC3339)
@@ -467,7 +536,7 @@ func (server *Server) spDetail(context fiber.Ctx) error {
 
 	err = server.db.QueryRow(`
 		SELECT u.id, u.name, u.email, u.phone, u.business_name, u.balance, u.status,
-			COALESCE(u.api_access, 0), COALESCE(u.sms_auto_approved, 0),
+			CASE WHEN COALESCE(u.api_access, FALSE) THEN 1 ELSE 0 END, CASE WHEN COALESCE(u.sms_auto_approved, FALSE) THEN 1 ELSE 0 END,
 			(SELECT COUNT(*) FROM users c WHERE c.sp_id = u.id AND c.deleted_at IS NULL) as customer_count,
 			(SELECT tp.name FROM tariff_plan_assignments tpa JOIN tariff_plans tp ON tp.id = tpa.tariff_plan_id WHERE tpa.user_id = u.id AND tpa.status = 'active' LIMIT 1) as wholesale_plan,
 			(SELECT tpa.tariff_plan_id FROM tariff_plan_assignments tpa WHERE tpa.user_id = u.id AND tpa.status = 'active' LIMIT 1) as wholesale_plan_id,
@@ -816,7 +885,7 @@ func (server *Server) countries(context fiber.Ctx) error {
 
 func (server *Server) operators(context fiber.Ctx) error {
 	rows, err := server.db.Query(`
-		SELECT o.id, o.name, COALESCE(o.codes, ''), o.masking_price, o.non_masking_price, o.is_active, COALESCE(c.name, 'Bangladesh')
+		SELECT o.id, o.name, COALESCE(o.codes, ''), COALESCE(o.masking_price, 0), COALESCE(o.non_masking_price, 0), o.is_active, COALESCE(c.name, 'Bangladesh')
 		FROM operators o
 		LEFT JOIN countries c ON c.id = o.country_id
 		ORDER BY o.name ASC

@@ -29,6 +29,16 @@ type SmsResponse struct {
 	GatewayMessageId *string
 	ErrorMessage     string
 	Raw              any
+
+	// Gateway report snapshot kept on the message for the SMS Reports table.
+	BillMsisdn         string
+	SmsType            string
+	Channel            string
+	ServerTxnID        string
+	ServerResponseCode string
+	MnoTxnID           string
+	MnoResponseCode    string
+	MnoResponseMessage string
 }
 
 // BulkSmsRequest encapsulates parameters for sending the same body to multiple recipients.

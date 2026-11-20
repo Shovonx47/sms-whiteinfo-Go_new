@@ -25,9 +25,9 @@ import (
 func (server *Server) systemSettingsProviders(context fiber.Ctx) error {
 	var total, active, healthy, otp int
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM gateways WHERE deleted_at IS NULL").Scan(&total)
-	_ = server.db.QueryRow("SELECT COUNT(*) FROM gateways WHERE is_enabled = 1 AND deleted_at IS NULL").Scan(&active)
+	_ = server.db.QueryRow("SELECT COUNT(*) FROM gateways WHERE is_enabled = TRUE AND deleted_at IS NULL").Scan(&active)
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM gateways WHERE health_status = 'healthy' AND deleted_at IS NULL").Scan(&healthy)
-	_ = server.db.QueryRow("SELECT COUNT(*) FROM gateways WHERE is_otp_enabled = 1 AND deleted_at IS NULL").Scan(&otp)
+	_ = server.db.QueryRow("SELECT COUNT(*) FROM gateways WHERE is_otp_enabled = TRUE AND deleted_at IS NULL").Scan(&otp)
 
 	return context.JSON(fiber.Map{
 		"data": fiber.Map{
@@ -42,9 +42,9 @@ func (server *Server) systemSettingsProviders(context fiber.Ctx) error {
 func (server *Server) systemSettingsRouting(context fiber.Ctx) error {
 	var totalPlans, activePlans, totalRules, activeRules int
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM route_plans").Scan(&totalPlans)
-	_ = server.db.QueryRow("SELECT COUNT(*) FROM route_plans WHERE is_enabled = 1").Scan(&activePlans)
+	_ = server.db.QueryRow("SELECT COUNT(*) FROM route_plans WHERE is_enabled = TRUE").Scan(&activePlans)
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM route_rules").Scan(&totalRules)
-	_ = server.db.QueryRow("SELECT COUNT(*) FROM route_rules WHERE is_enabled = 1").Scan(&activeRules)
+	_ = server.db.QueryRow("SELECT COUNT(*) FROM route_rules WHERE is_enabled = TRUE").Scan(&activeRules)
 
 	return context.JSON(fiber.Map{
 		"data": fiber.Map{
@@ -920,7 +920,7 @@ func (server *Server) spsEmployees(context fiber.Ctx) error {
 func (server *Server) securityDashboard(context fiber.Ctx) error {
 	var totalUsers, apiUsers, pendingIps int
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM users WHERE deleted_at IS NULL").Scan(&totalUsers)
-	_ = server.db.QueryRow("SELECT COUNT(*) FROM users WHERE api_access = 1 AND deleted_at IS NULL").Scan(&apiUsers)
+	_ = server.db.QueryRow("SELECT COUNT(*) FROM users WHERE api_access = TRUE AND deleted_at IS NULL").Scan(&apiUsers)
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM ip_whitelist_requests WHERE status = 'pending'").Scan(&pendingIps)
 
 	var blocked24h int
@@ -1138,7 +1138,7 @@ func (server *Server) monitoringTps(context fiber.Ctx) error {
 	var currentTps, totalCapacity int
 
 	// Aggregate capacity of active gateways
-	_ = server.db.QueryRow("SELECT COALESCE(SUM(requests_per_second), 0) FROM gateways WHERE is_enabled = 1").Scan(&totalCapacity)
+	_ = server.db.QueryRow("SELECT COALESCE(SUM(requests_per_second), 0) FROM gateways WHERE is_enabled = TRUE").Scan(&totalCapacity)
 
 	// Throughput in last 1 minute
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM messages WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE)").Scan(&currentTps)
@@ -1395,7 +1395,7 @@ func (server *Server) routingSimulate(context fiber.Ctx) error {
 	err := server.db.QueryRow(`
 		SELECT id, name, code
 		FROM route_plans
-		WHERE traffic_type = ? AND is_enabled = 1
+		WHERE traffic_type = ? AND is_enabled = TRUE
 		ORDER BY is_default DESC, id ASC LIMIT 1
 	`, strings.ToLower(req.TrafficType)).Scan(&planID, &planName, &planCode)
 	if err != nil {
@@ -1403,7 +1403,7 @@ func (server *Server) routingSimulate(context fiber.Ctx) error {
 		_ = server.db.QueryRow(`
 			SELECT id, name, code
 			FROM route_plans
-			WHERE is_enabled = 1
+			WHERE is_enabled = TRUE
 			ORDER BY is_default DESC, id ASC LIMIT 1
 		`).Scan(&planID, &planName, &planCode)
 	}
@@ -1418,7 +1418,7 @@ func (server *Server) routingSimulate(context fiber.Ctx) error {
 			SELECT g.name, g.driver, g.requests_per_second
 			FROM route_plan_gateways rpg
 			JOIN gateways g ON g.id = rpg.gateway_id
-			WHERE rpg.route_plan_id = ? AND rpg.is_active = 1
+			WHERE rpg.route_plan_id = ? AND rpg.is_active = TRUE
 			ORDER BY rpg.priority ASC LIMIT 1
 		`, planID).Scan(&gwName, &driver, &rps)
 		if gwErr == nil {
@@ -1451,7 +1451,7 @@ func (server *Server) routingLoadBalancing(context fiber.Ctx) error {
 	rows, err := server.db.Query(`
 		SELECT id, name, driver, requests_per_second, priority, supports_bulk, timeout_seconds
 		FROM gateways
-		WHERE is_enabled = 1
+		WHERE is_enabled = TRUE
 		ORDER BY priority ASC, requests_per_second DESC
 	`)
 	if err != nil {
@@ -1646,4 +1646,76 @@ func (server *Server) auditLogsSecurity(context fiber.Ctx) error {
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM ip_whitelist_audit_logs").Scan(&total)
 
 	return listResponse(context, items, listMeta{Page: page, PerPage: perPage, Total: total})
+}
+
+func (server *Server) adminEmployees(context fiber.Ctx) error {
+	page, perPage := pagination(context)
+	rows, err := server.db.Query(`
+		SELECT id, name, email, COALESCE(phone, ''), status, created_at
+		FROM users
+		WHERE type = 'superman' AND deleted_at IS NULL
+		ORDER BY id ASC
+		LIMIT ? OFFSET ?
+	`, perPage, (page-1)*perPage)
+	if err != nil {
+		return databaseError(context, err)
+	}
+	defer rows.Close()
+
+	type empItem struct {
+		ID        int64  `json:"id"`
+		Name      string `json:"name"`
+		Email     string `json:"email"`
+		Phone     string `json:"phone"`
+		Role      string `json:"role"`
+		Status    string `json:"status"`
+		CreatedAt string `json:"created_at"`
+	}
+
+	items := make([]empItem, 0)
+	for rows.Next() {
+		var it empItem
+		var createdAt time.Time
+		if err := rows.Scan(&it.ID, &it.Name, &it.Email, &it.Phone, &it.Status, &createdAt); err == nil {
+			it.Role = "Super Administrator"
+			it.CreatedAt = createdAt.Format(time.RFC3339)
+			items = append(items, it)
+		}
+	}
+
+	return listResponse(context, items, listMeta{Page: page, PerPage: perPage, Total: len(items)})
+}
+
+func (server *Server) adminRoles(context fiber.Ctx) error {
+	page, perPage := pagination(context)
+	rows, err := server.db.Query(`
+		SELECT id, name, COALESCE(description, ''), created_at
+		FROM sp_roles
+		WHERE scope = 'superman'
+		ORDER BY id ASC
+		LIMIT ? OFFSET ?
+	`, perPage, (page-1)*perPage)
+	if err != nil {
+		return databaseError(context, err)
+	}
+	defer rows.Close()
+
+	type roleItem struct {
+		ID          int64  `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		CreatedAt   string `json:"created_at"`
+	}
+
+	items := make([]roleItem, 0)
+	for rows.Next() {
+		var it roleItem
+		var createdAt time.Time
+		if err := rows.Scan(&it.ID, &it.Name, &it.Description, &createdAt); err == nil {
+			it.CreatedAt = createdAt.Format(time.RFC3339)
+			items = append(items, it)
+		}
+	}
+
+	return listResponse(context, items, listMeta{Page: page, PerPage: perPage, Total: len(items)})
 }

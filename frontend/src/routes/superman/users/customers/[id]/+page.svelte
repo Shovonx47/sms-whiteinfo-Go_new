@@ -37,6 +37,14 @@
 		kyc_verified_at: string | null;
 		api_access?: boolean;
 		sms_auto_approved?: boolean;
+		trade_license_submitted?: boolean;
+		kyc_rejected_reason?: string | null;
+		email_verified_at?: string | null;
+		phone_verified_at?: string | null;
+		last_login_at?: string | null;
+		registration_source?: string | null;
+		created_by_admin?: boolean;
+		created_by_sp?: boolean;
 		tariff_plan_id?: number | null;
 		senders?: Array<{ id: number; sender_id: string; type: string; gateway_name: string }>;
 		ip_whitelists?: Array<{ id: number; ip_address: string; status: string }>;
@@ -349,6 +357,24 @@
 						<span class="text-gray-400 font-medium">Business / Company</span>
 						<p class="font-semibold text-gray-700 dark:text-gray-300 mt-0.5">{detail.customer.business_name || detail.company_name || '—'}</p>
 					</div>
+					<div>
+						<span class="text-gray-400 font-medium">Email Verification</span>
+						<p class="mt-0.5 font-semibold {detail.email_verified_at ? 'text-emerald-600' : 'text-rose-600'}">
+							{detail.email_verified_at ? `Verified (${new Date(detail.email_verified_at).toLocaleString()})` : 'Unverified'}
+						</p>
+					</div>
+					<div>
+						<span class="text-gray-400 font-medium">Mobile Verification</span>
+						<p class="mt-0.5 font-semibold {detail.phone_verified_at ? 'text-emerald-600' : 'text-rose-600'}">
+							{detail.phone_verified_at ? `Verified (${new Date(detail.phone_verified_at).toLocaleString()})` : 'Unverified'}
+						</p>
+					</div>
+					<div>
+						<span class="text-gray-400 font-medium">Registration Source</span>
+						<p class="font-semibold text-gray-700 dark:text-gray-300 mt-0.5">
+							{detail.registration_source || (detail.created_by_admin ? 'Created by Super Admin' : detail.created_by_sp ? 'Created by SP Reseller' : 'Self-Registered')}
+						</p>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -364,6 +390,12 @@
 					<span class="text-gray-500">NID: <strong class="font-mono font-bold text-gray-900 dark:text-white">{detail.nid_number || 'Not Submitted'}</strong></span>
 				</div>
 			</div>
+
+			{#if detail.kyc_rejected_reason}
+				<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
+					<span class="font-bold">Admin Rejection / Resubmission Reason:</span> {detail.kyc_rejected_reason}
+				</div>
+			{/if}
 
 			<div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
 				<!-- Front Side of NID -->
@@ -433,6 +465,50 @@
 							<span class="text-xs text-gray-400 italic">No live photo captured</span>
 						{/if}
 					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Business Information & Trade License -->
+		<div class="rounded-xl bg-white p-6 shadow-xs ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 space-y-5">
+			<h3 class="text-sm font-bold text-gray-900 dark:text-white">Business Information &amp; Trade License</h3>
+			<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+				<div>
+					<span class="text-gray-400 font-medium">Business / Company Name</span>
+					<p class="font-semibold text-gray-900 dark:text-white mt-0.5">{detail.customer.business_name || detail.company_name || '—'}</p>
+				</div>
+				<div>
+					<span class="text-gray-400 font-medium">Trade License Number</span>
+					<p class="font-mono font-semibold text-gray-900 dark:text-white mt-0.5">{detail.trade_license_number || 'Not Submitted'}</p>
+				</div>
+				<div>
+					<span class="text-gray-400 font-medium">Trade License Status</span>
+					<p class="mt-0.5">
+						<span class="rounded px-2 py-0.5 text-[11px] font-bold {detail.trade_license_submitted ? 'bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}">
+							{detail.trade_license_submitted ? 'Submitted' : 'Not Submitted'}
+						</span>
+					</p>
+				</div>
+				<div class="sm:col-span-2">
+					<span class="text-gray-400 font-medium">Business Address</span>
+					<p class="font-semibold text-gray-700 dark:text-gray-300 mt-0.5">{detail.business_address || '—'}</p>
+				</div>
+				<div>
+					<span class="text-gray-400 font-medium">Trade License Document</span>
+					<p class="mt-1">
+						{#if detail.trade_license_file}
+							<a
+								href={detail.trade_license_file.startsWith('http') ? detail.trade_license_file : `/storage/${detail.trade_license_file}`}
+								target="_blank"
+								rel="noreferrer"
+								class="inline-block rounded bg-emerald-50 px-2 py-1 text-[11px] font-bold text-emerald-700 hover:underline dark:bg-emerald-950/40 dark:text-emerald-300"
+							>
+								View Document
+							</a>
+						{:else}
+							<span class="rounded bg-gray-100 px-2 py-1 text-[11px] font-bold text-gray-600 dark:bg-gray-800 dark:text-gray-400">Not Submitted</span>
+						{/if}
+					</p>
 				</div>
 			</div>
 		</div>

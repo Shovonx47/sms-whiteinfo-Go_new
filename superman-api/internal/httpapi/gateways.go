@@ -13,14 +13,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gofiber/fiber/v3"
 	"smswhiteinfo/superman-api/internal/crypto"
+
+	"github.com/gofiber/fiber/v3"
 )
 
 type gatewayPayload struct {
 	Name                 string         `json:"name"`
 	Driver               string         `json:"driver"`
 	Credentials          map[string]any `json:"credentials"`
+	Config               map[string]any `json:"config"`
 	Priority             int            `json:"priority"`
 	IsEnabled            *bool          `json:"is_enabled"`
 	IsOtpEnabled         *bool          `json:"is_otp_enabled"`
@@ -75,76 +77,6 @@ func extractRouteCode(credMap map[string]any) *string {
 		}
 	}
 	return nil
-}
-
-type GatewayListItem struct {
-	ID                int64   `json:"id"`
-	Name              string  `json:"name"`
-	Driver            string  `json:"driver"`
-	Priority          int     `json:"priority"`
-	IsEnabled         bool    `json:"is_enabled"`
-	Enabled           bool    `json:"enabled"`
-	IsOtpEnabled      bool    `json:"is_otp_enabled"`
-	OtpEnabled        bool    `json:"otp_enabled"`
-	RequestsPerSecond int     `json:"requests_per_second"`
-	HealthStatus      string  `json:"health_status"`
-	CostMode          string  `json:"cost_mode"`
-	DlrSupport        bool    `json:"dlr_support"`
-	RouteCode         *string `json:"route_code"`
-	CreatedAt         string  `json:"created_at"`
-	UpdatedAt         string  `json:"updated_at"`
-}
-
-func (server *Server) gateways(context fiber.Ctx) error {
-	rows, err := server.db.Query(`
-		SELECT id, name, driver, priority, is_otp_enabled, is_enabled, requests_per_second,
-		       health_status, cost_mode, dlr_support, credentials,
-		       DATE_FORMAT(created_at, '%b %d, %Y %H:%i:%s'),
-		       DATE_FORMAT(updated_at, '%b %d, %Y %H:%i:%s')
-		FROM gateways
-		WHERE deleted_at IS NULL
-		ORDER BY priority ASC, id ASC
-	`)
-	if err != nil {
-		return databaseError(context, err)
-	}
-	defer rows.Close()
-
-	enc, _ := server.getEncrypter()
-
-	items := make([]GatewayListItem, 0)
-	for rows.Next() {
-		var item GatewayListItem
-		var rawCreds sql.NullString
-		var created, updated sql.NullString
-
-		if err := rows.Scan(
-			&item.ID, &item.Name, &item.Driver, &item.Priority, &item.IsOtpEnabled, &item.IsEnabled,
-			&item.RequestsPerSecond, &item.HealthStatus, &item.CostMode, &item.DlrSupport,
-			&rawCreds, &created, &updated,
-		); err != nil {
-			return databaseError(context, err)
-		}
-
-		item.Enabled = item.IsEnabled
-		item.OtpEnabled = item.IsOtpEnabled
-		if created.Valid {
-			item.CreatedAt = created.String
-		}
-		if updated.Valid {
-			item.UpdatedAt = updated.String
-		}
-
-		if rawCreds.Valid && rawCreds.String != "" && enc != nil {
-			if credMap, err := enc.DecryptArray(rawCreds.String); err == nil {
-				item.RouteCode = extractRouteCode(credMap)
-			}
-		}
-
-		items = append(items, item)
-	}
-
-	return context.JSON(fiber.Map{"data": items})
 }
 
 func (server *Server) createGateway(context fiber.Ctx) error {
@@ -224,13 +156,20 @@ func (server *Server) createGateway(context fiber.Ctx) error {
 		hasThirdPartyDipping = *payload.HasThirdPartyDipping
 	}
 
+	var configJSON any
+	if len(payload.Config) > 0 {
+		if raw, err := json.Marshal(payload.Config); err == nil {
+			configJSON = string(raw)
+		}
+	}
+
 	res, err := server.db.Exec(`
 		INSERT INTO gateways (
-			name, driver, credentials, priority, is_enabled, is_otp_enabled, supports_bulk,
+			name, driver, credentials, config, priority, is_enabled, is_otp_enabled, supports_bulk,
 			requests_per_second, timeout_seconds, dlr_support, cost_mode,
 			dipping_required, has_third_party_dipping, health_status, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'healthy', NOW(), NOW())
-	`, payload.Name, payload.Driver, encryptedCreds, priority, isEnabled, isOtpEnabled, supportsBulk,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'healthy', NOW(), NOW())
+	`, payload.Name, payload.Driver, encryptedCreds, configJSON, priority, isEnabled, isOtpEnabled, supportsBulk,
 		rps, timeoutSec, dlrSupport, costMode, dippingRequired, hasThirdPartyDipping)
 	if err != nil {
 		return databaseError(context, err)
@@ -325,6 +264,12 @@ func (server *Server) updateGateway(context fiber.Ctx) error {
 		setClauses = append(setClauses, "credentials = ?")
 		args = append(args, encCreds)
 	}
+	if payload.Config != nil {
+		if raw, err := json.Marshal(payload.Config); err == nil {
+			setClauses = append(setClauses, "config = ?")
+			args = append(args, string(raw))
+		}
+	}
 
 	args = append(args, id)
 	query := fmt.Sprintf("UPDATE gateways SET %s WHERE id = ?", strings.Join(setClauses, ", "))
@@ -386,6 +331,7 @@ type GatewayDetailResponse struct {
 	CreatedAt            string                `json:"created_at"`
 	UpdatedAt            string                `json:"updated_at"`
 	Credentials          map[string]any        `json:"credentials,omitempty"`
+	Config               map[string]any        `json:"config,omitempty"`
 	BillingSummary       GatewayBillingSummary `json:"billing_summary"`
 }
 
@@ -396,13 +342,13 @@ func (server *Server) gatewayDetail(context fiber.Ctx) error {
 	}
 
 	var g GatewayDetailResponse
-	var rawCreds sql.NullString
+	var rawCreds, rawConfig sql.NullString
 	var created, updated sql.NullString
 
 	err = server.db.QueryRow(`
 		SELECT id, name, driver, priority, is_enabled, is_otp_enabled, supports_bulk,
 		       requests_per_second, timeout_seconds, dlr_support, cost_mode,
-		       dipping_required, has_third_party_dipping, health_status, credentials,
+		       dipping_required, has_third_party_dipping, health_status, credentials, config,
 		       DATE_FORMAT(created_at, '%b %d, %Y %H:%i:%s'),
 		       DATE_FORMAT(updated_at, '%b %d, %Y %H:%i:%s')
 		FROM gateways
@@ -410,11 +356,18 @@ func (server *Server) gatewayDetail(context fiber.Ctx) error {
 	`, id).Scan(
 		&g.ID, &g.Name, &g.Driver, &g.Priority, &g.IsEnabled, &g.IsOtpEnabled, &g.SupportsBulk,
 		&g.RequestsPerSecond, &g.TimeoutSeconds, &g.DlrSupport, &g.CostMode,
-		&g.DippingRequired, &g.HasThirdPartyDipping, &g.HealthStatus, &rawCreds,
+		&g.DippingRequired, &g.HasThirdPartyDipping, &g.HealthStatus, &rawCreds, &rawConfig,
 		&created, &updated,
 	)
 	if err != nil {
 		return context.Status(http.StatusNotFound).JSON(fiber.Map{"message": "Gateway not found."})
+	}
+
+	if rawConfig.Valid && rawConfig.String != "" {
+		var cfg map[string]any
+		if json.Unmarshal([]byte(rawConfig.String), &cfg) == nil {
+			g.Config = cfg
+		}
 	}
 
 	g.Enabled = g.IsEnabled
@@ -426,21 +379,28 @@ func (server *Server) gatewayDetail(context fiber.Ctx) error {
 		g.UpdatedAt = updated.String
 	}
 
+	// The edit form (like Filament's revealable password inputs) needs the real values;
+	// every other consumer only ever receives masked credentials.
+	reveal := context.Query("edit") == "1"
 	if rawCreds.Valid && rawCreds.String != "" {
 		enc, err := server.getEncrypter()
 		if err == nil {
 			if credMap, err := enc.DecryptArray(rawCreds.String); err == nil {
 				g.RouteCode = extractRouteCode(credMap)
-				masked := make(map[string]any)
-				for k, v := range credMap {
-					strVal := fmt.Sprintf("%v", v)
-					if len(strVal) > 6 {
-						masked[k] = strVal[:3] + "..." + strVal[len(strVal)-2:]
-					} else {
-						masked[k] = "***"
+				if reveal {
+					g.Credentials = credMap
+				} else {
+					masked := make(map[string]any)
+					for k, v := range credMap {
+						strVal := fmt.Sprintf("%v", v)
+						if len(strVal) > 6 {
+							masked[k] = strVal[:3] + "..." + strVal[len(strVal)-2:]
+						} else {
+							masked[k] = "***"
+						}
 					}
+					g.Credentials = masked
 				}
-				g.Credentials = masked
 			}
 		}
 	}
@@ -666,14 +626,14 @@ func (server *Server) gatewayDashboard(context fiber.Ctx) error {
 	if len(cards) == 0 {
 		cards = append(cards, fiber.Map{
 			"label":       "Wallet Balance",
-			"value":       "—",
+			"value":       "â€”",
 			"description": "Available balance at CP end",
 			"color":       "success",
 			"icon":        "heroicon-o-banknotes",
 		})
 		cards = append(cards, fiber.Map{
 			"label":       "Carrier Balance",
-			"value":       "—",
+			"value":       "â€”",
 			"description": "Carrier credit status",
 			"color":       "success",
 			"icon":        "heroicon-o-device-phone-mobile",
@@ -732,6 +692,23 @@ func (server *Server) gatewayOperatorRates(context fiber.Ctx) error {
 		perPage = pp
 	}
 
+	if context.Query("export") == "1" {
+		perPage = 5000
+		page = 1
+	}
+
+	orderBy := "gor.id ASC"
+	sortDirection := "ASC"
+	if strings.EqualFold(context.Query("dir"), "desc") {
+		sortDirection = "DESC"
+	}
+	switch context.Query("sort") {
+	case "operator":
+		orderBy = "o.name " + sortDirection + ", gor.id ASC"
+	case "country":
+		orderBy = "c.name " + sortDirection + ", gor.id ASC"
+	}
+
 	whereClause := "WHERE gor.gateway_id = ?"
 	args := []any{gatewayID}
 
@@ -756,16 +733,16 @@ func (server *Server) gatewayOperatorRates(context fiber.Ctx) error {
 	query := fmt.Sprintf(`
 		SELECT gor.id, gor.operator_id, o.name, COALESCE(c.name, 'Bangladesh'),
 		       gor.masking_price, gor.non_masking_price, gor.dipping_charge,
-		       COALESCE(o.codes, ''), COALESCE(c.code, 880),
-		       DATE_FORMAT(gor.created_at, '%%b %%d, %%Y %%H:%%i:%%s'),
-		       DATE_FORMAT(gor.updated_at, '%%b %%d, %%Y %%H:%%i:%%s')
+		       COALESCE(o.codes, ''), COALESCE(c.code, '880'),
+		       TO_CHAR(gor.created_at, 'Mon DD, YYYY HH24:MI:SS'),
+		       TO_CHAR(gor.updated_at, 'Mon DD, YYYY HH24:MI:SS')
 		FROM gateway_operator_rates gor
 		JOIN operators o ON o.id = gor.operator_id
 		LEFT JOIN countries c ON c.id = o.country_id
 		%s
-		ORDER BY gor.id ASC
+		ORDER BY %s
 		LIMIT ? OFFSET ?
-	`, whereClause)
+	`, whereClause, orderBy)
 
 	limitArgs := append(args, perPage, (page-1)*perPage)
 	rows, err := server.db.Query(query, limitArgs...)
@@ -889,6 +866,11 @@ func (server *Server) saveOperatorRate(context fiber.Ctx) error {
 	// Create new rate
 	if payload.OperatorID < 1 {
 		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "Operator is required."})
+	}
+
+	var existingRate int64
+	if err := server.db.QueryRow("SELECT id FROM gateway_operator_rates WHERE gateway_id = ? AND operator_id = ?", gatewayID, payload.OperatorID).Scan(&existingRate); err == nil {
+		return context.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message": "A rate for this operator already exists on this gateway."})
 	}
 
 	res, err := server.db.Exec(`

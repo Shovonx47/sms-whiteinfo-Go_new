@@ -50,8 +50,12 @@ function createAdminStore() {
 			try {
 				const response = await supermanApi.get<{ data: AdminUser }>('/api/v1/superman/auth/me');
 				state.user = response.data;
-			} catch {
-				supermanApi.clearToken();
+			} catch (error: unknown) {
+				const status = (error as { status?: number })?.status;
+				// Only clear stored token when the server explicitly rejects it (401/403), not on aborted navigation.
+				if (status === 401 || status === 403) {
+					supermanApi.clearToken();
+				}
 				state.user = null;
 			} finally {
 				state.initialized = true;

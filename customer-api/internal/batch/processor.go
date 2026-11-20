@@ -136,6 +136,28 @@ func (p *BatchProcessor) ProcessBatch(ctx context.Context, batchID int64) error 
 	normSenderType := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(senderType)), "_", "-")
 	isMasking := normSenderType != "numeric" && normSenderType != "non-masking" && normSenderType != "number" && normSenderType != ""
 
+	// Per-operator gateway routes (masking senders). Missing table or rows fall
+	// back to the sender's primary gateway.
+	senderRoutes := map[string]int64{}
+	if routeRows, rErr := p.db.QueryContext(ctx, "SELECT operator_key, gateway_id FROM sender_operator_gateways WHERE sender_id = ?", senderID.Int64); rErr == nil {
+		for routeRows.Next() {
+			var key string
+			var gw int64
+			if scanErr := routeRows.Scan(&key, &gw); scanErr == nil {
+				senderRoutes[key] = gw
+			}
+		}
+		routeRows.Close()
+	}
+	gatewayFor := func(phone string) any {
+		if isMasking {
+			if gw, ok := senderRoutes[OperatorKeyForPhone(phone)]; ok && gw > 0 {
+				return gw
+			}
+		}
+		return gatewayID
+	}
+
 	rateResolver, err := billing.ForUser(ctx, p.db, userID)
 	if err != nil {
 		_, _ = p.db.ExecContext(ctx, "UPDATE batches SET status = 'failed', updated_at = NOW() WHERE id = ?", batchID)
@@ -242,7 +264,7 @@ func (p *BatchProcessor) ProcessBatch(ctx context.Context, batchID int64) error 
 				userID,
 				batchID,
 				senderID.Int64,
-				gatewayID,
+				gatewayFor(row["to"].(string)),
 				row["to"],
 				row["body"],
 				row["source"],

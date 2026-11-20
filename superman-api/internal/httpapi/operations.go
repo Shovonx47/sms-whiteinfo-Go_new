@@ -25,6 +25,7 @@ type providerHealthItem struct {
 	CostMode           string  `json:"cost_mode"`
 	TotalDispatches    int64   `json:"total_dispatches"`
 	SuccessRatePercent float64 `json:"success_rate_percent"`
+	Revenue            float64 `json:"revenue"`
 }
 
 type providerHealthSummary struct {
@@ -42,6 +43,7 @@ func (server *Server) providerHealth(context fiber.Ctx) error {
 		       g.requests_per_second, COALESCE(g.last_health_latency_ms, 85), g.last_health_check_at,
 		       g.is_enabled, g.is_otp_enabled, g.dlr_support, g.cost_mode,
 		       COUNT(m.id) as total_msgs,
+		       COALESCE(SUM(m.cost), 0) as revenue,
 		       COALESCE(ROUND(SUM(CASE WHEN m.status = 'delivered' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(m.id), 0), 2), 99.4) as success_rate
 		FROM gateways g
 		LEFT JOIN messages m ON m.gateway_id = g.id
@@ -70,7 +72,7 @@ func (server *Server) providerHealth(context fiber.Ctx) error {
 			&item.ID, &item.Name, &item.Driver, &item.HealthStatus, &item.Priority,
 			&item.RequestsPerSecond, &item.LatencyMs, &lastChecked,
 			&item.IsEnabled, &item.IsOtpEnabled, &item.DlrSupport, &item.CostMode,
-			&item.TotalDispatches, &item.SuccessRatePercent,
+			&item.TotalDispatches, &item.Revenue, &item.SuccessRatePercent,
 		); err != nil {
 			return databaseError(context, err)
 		}
@@ -108,7 +110,7 @@ func (server *Server) providerHealthCheckAll(context fiber.Ctx) error {
 	_, err := server.db.Exec(`
 		UPDATE gateways
 		SET last_health_check_at = NOW(),
-		    last_health_latency_ms = FLOOR(45 + (RAND() * 80)),
+		    last_health_latency_ms = FLOOR(45 + (random() * 80)),
 		    health_status = 'healthy'
 		WHERE deleted_at IS NULL
 	`)
@@ -169,7 +171,7 @@ func (server *Server) providerApiLogs(context fiber.Ctx) error {
 		       CASE WHEN m.status = 'delivered' THEN 200
 		            WHEN m.status = 'failed' THEN 502
 		            ELSE 202 END as status_code,
-		       FLOOR(60 + (RAND() * 90)) as latency_ms,
+		       FLOOR(60 + (random() * 90)) as latency_ms,
 		       m.cost, m.created_at
 		FROM messages m
 		LEFT JOIN gateways g ON g.id = m.gateway_id
@@ -288,129 +290,6 @@ func (server *Server) reportsExecutive(context fiber.Ctx) error {
 	_ = server.db.QueryRow("SELECT COUNT(*) FROM senders WHERE approval_status = 'approved' AND deleted_at IS NULL").Scan(&summary.ActiveSenders)
 
 	return context.JSON(fiber.Map{"data": summary})
-}
-
-// Bulk SMS Templates
-type templateItem struct {
-	ID        int64   `json:"id"`
-	Name      string  `json:"name"`
-	Body      string  `json:"body"`
-	Customer  string  `json:"customer"`
-	Approval  string  `json:"approval"`
-	SenderID  *string `json:"sender_id"`
-	CreatedAt string  `json:"created_at"`
-}
-
-func (server *Server) templates(context fiber.Ctx) error {
-	page, perPage := pagination(context)
-	search := strings.TrimSpace(context.Query("search"))
-
-	where := "WHERE t.deleted_at IS NULL"
-	args := []any{}
-	if search != "" {
-		where += " AND (t.name LIKE ? OR t.body LIKE ?)"
-		term := "%" + search + "%"
-		args = append(args, term, term)
-	}
-
-	var total int
-	err := server.db.QueryRow("SELECT COUNT(*) FROM templates t "+where, args...).Scan(&total)
-	if err != nil {
-		// If templates table does not exist, return empty graceful list
-		return listResponse(context, []templateItem{}, listMeta{Page: 1, PerPage: perPage, Total: 0})
-	}
-
-	args = append(args, perPage, (page-1)*perPage)
-	rows, err := server.db.Query(`
-		SELECT t.id, t.name, t.body, COALESCE(u.name, 'Admin'), COALESCE(t.approval, 'approved'),
-		       s.sender_id, t.created_at
-		FROM templates t
-		LEFT JOIN users u ON u.id = t.user_id
-		LEFT JOIN senders s ON s.id = t.sender_id
-		`+where+`
-		ORDER BY t.created_at DESC
-		LIMIT ? OFFSET ?
-	`, args...)
-	if err != nil {
-		return databaseError(context, err)
-	}
-	defer rows.Close()
-
-	items := make([]templateItem, 0)
-	for rows.Next() {
-		var item templateItem
-		var createdAt time.Time
-		var senderID sql.NullString
-		if err := rows.Scan(&item.ID, &item.Name, &item.Body, &item.Customer, &item.Approval, &senderID, &createdAt); err != nil {
-			return databaseError(context, err)
-		}
-		if senderID.Valid {
-			item.SenderID = &senderID.String
-		}
-		item.CreatedAt = createdAt.Format(time.RFC3339)
-		items = append(items, item)
-	}
-
-	return listResponse(context, items, listMeta{Page: page, PerPage: perPage, Total: total})
-}
-
-// Contacts & Groups
-type contactItem struct {
-	ID        int64   `json:"id"`
-	Name      string  `json:"name"`
-	Mobile    string  `json:"mobile"`
-	Email     *string `json:"email"`
-	GroupName *string `json:"group_name"`
-	CreatedAt string  `json:"created_at"`
-}
-
-func (server *Server) contacts(context fiber.Ctx) error {
-	page, perPage := pagination(context)
-	search := strings.TrimSpace(context.Query("search"))
-
-	where := "WHERE 1 = 1"
-	args := []any{}
-	if search != "" {
-		where += " AND (c.name LIKE ? OR c.phone LIKE ?)"
-		term := "%" + search + "%"
-		args = append(args, term, term)
-	}
-
-	var total int
-	err := server.db.QueryRow("SELECT COUNT(*) FROM contacts c "+where, args...).Scan(&total)
-	if err != nil {
-		return listResponse(context, []contactItem{}, listMeta{Page: 1, PerPage: perPage, Total: 0})
-	}
-
-	args = append(args, perPage, (page-1)*perPage)
-	rows, err := server.db.Query(`
-		SELECT c.id, c.name, c.phone, c.email, c.created_at
-		FROM contacts c
-		`+where+`
-		ORDER BY c.created_at DESC
-		LIMIT ? OFFSET ?
-	`, args...)
-	if err != nil {
-		return databaseError(context, err)
-	}
-	defer rows.Close()
-
-	items := make([]contactItem, 0)
-	for rows.Next() {
-		var item contactItem
-		var createdAt time.Time
-		var email sql.NullString
-		if err := rows.Scan(&item.ID, &item.Name, &item.Mobile, &email, &createdAt); err != nil {
-			return databaseError(context, err)
-		}
-		if email.Valid {
-			item.Email = &email.String
-		}
-		item.CreatedAt = createdAt.Format(time.RFC3339)
-		items = append(items, item)
-	}
-
-	return listResponse(context, items, listMeta{Page: page, PerPage: perPage, Total: total})
 }
 
 // System Health Monitoring

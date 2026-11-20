@@ -7,10 +7,15 @@
 	interface IPWhitelistRequest {
 		id: number;
 		customer: string;
+		email: string;
 		ip_address: string;
+		label: string | null;
 		notes: string | null;
+		admin_note: string | null;
+		reviewer: string | null;
 		status: string;
 		created_at: string;
+		reviewed_at: string | null;
 	}
 
 	let whitelists = $state<IPWhitelistRequest[]>([]);
@@ -55,10 +60,14 @@
 
 	const exportColumns: ExportColumn<IPWhitelistRequest>[] = [
 		{ header: 'Customer', getValue: (w) => w.customer },
+		{ header: 'Email', getValue: (w) => w.email || '—' },
 		{ header: 'IP Address', getValue: (w) => w.ip_address },
-		{ header: 'Server Purpose / Notes', getValue: (w) => w.notes || '—' },
+		{ header: 'Server Purpose / Notes', getValue: (w) => w.label || w.notes || '—' },
 		{ header: 'Status', getValue: (w) => w.status.toUpperCase() },
-		{ header: 'Created Date', getValue: (w) => (w.created_at ? new Date(w.created_at).toLocaleString() : '—') }
+		{ header: 'Admin Note', getValue: (w) => w.admin_note || '—' },
+		{ header: 'Reviewer', getValue: (w) => w.reviewer || '—' },
+		{ header: 'Created Date', getValue: (w) => (w.created_at ? new Date(w.created_at).toLocaleString() : '—') },
+		{ header: 'Reviewed At', getValue: (w) => (w.reviewed_at ? new Date(w.reviewed_at).toLocaleString() : '—') }
 	];
 </script>
 
@@ -94,9 +103,13 @@
 				<thead>
 					<tr class="border-b border-gray-100 dark:border-gray-800 text-gray-400 uppercase text-[10px] font-semibold">
 						<th class="py-2.5">Customer</th>
+						<th class="py-2.5">Email</th>
 						<th class="py-2.5">IP Address</th>
 						<th class="py-2.5">Server Purpose / Notes</th>
 						<th class="py-2.5">Status</th>
+						<th class="py-2.5">Admin Note</th>
+						<th class="py-2.5">Reviewer</th>
+						<th class="py-2.5">Reviewed At</th>
 						<th class="py-2.5 text-right">Actions</th>
 					</tr>
 				</thead>
@@ -104,13 +117,17 @@
 					{#each whitelists as w}
 						<tr class="hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors">
 							<td class="py-3 font-semibold text-gray-900 dark:text-white">{w.customer}</td>
+							<td class="py-3 text-gray-500 dark:text-gray-400">{w.email || '—'}</td>
 							<td class="py-3 font-mono font-bold text-gray-800 dark:text-gray-200">{w.ip_address}</td>
-							<td class="py-3 text-gray-500 dark:text-gray-400">{w.notes ?? '—'}</td>
+							<td class="py-3 text-gray-500 dark:text-gray-400">{w.label || w.notes || '—'}</td>
 							<td class="py-3">
 								<span class="inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold {w.status === 'approved' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : w.status === 'pending' ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'}">
 									{w.status}
 								</span>
 							</td>
+							<td class="max-w-40 truncate py-3 text-gray-500" title={w.admin_note || ''}>{w.admin_note || '—'}</td>
+							<td class="py-3 text-gray-600 dark:text-gray-400">{w.reviewer || '—'}</td>
+							<td class="py-3 text-gray-400">{w.reviewed_at ? new Date(w.reviewed_at).toLocaleString() : '—'}</td>
 							<td class="py-3 text-right">
 								{#if w.status === 'pending'}
 									<div class="inline-flex items-center gap-1.5">

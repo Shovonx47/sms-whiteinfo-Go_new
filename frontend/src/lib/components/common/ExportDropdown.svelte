@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { exportToCSV, exportToPDF, type ExportColumn } from '$lib/utils/export.js';
+	import { exportToCSV, exportToExcel, exportToPDF, type ExportColumn } from '$lib/utils/export.js';
 
 	interface Props {
 		title: string;
@@ -8,6 +8,7 @@
 		disabled?: boolean;
 		filterSummary?: string;
 		class?: string;
+		buttonClass?: string;
 	}
 
 	let {
@@ -16,10 +17,12 @@
 		getData,
 		disabled = false,
 		filterSummary = '',
-		class: customClass = ''
+		class: customClass = '',
+		buttonClass = ''
 	}: Props = $props();
 
 	let open = $state(false);
+	let root = $state<HTMLDivElement | null>(null);
 	let exporting = $state(false);
 	let toastMessage = $state<string | null>(null);
 	let toastType = $state<'success' | 'error'>('success');
@@ -34,10 +37,19 @@
 		}, 3500);
 	}
 
-	function toggleDropdown(e: Event) {
-		e.stopPropagation();
+	function toggleDropdown() {
 		if (disabled || exporting) return;
 		open = !open;
+	}
+
+	// Close only on clicks outside this dropdown. Relying on stopPropagation
+	// fails with Svelte 5 delegated events, which closed the menu on the same
+	// click that opened it.
+	function handleWindowClick(event: MouseEvent) {
+		if (!open) return;
+		const target = event.target as Node | null;
+		if (root && target && root.contains(target)) return;
+		open = false;
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -46,7 +58,7 @@
 		}
 	}
 
-	async function handleExport(type: 'csv' | 'pdf') {
+	async function handleExport(type: 'csv' | 'excel' | 'pdf') {
 		open = false;
 		exporting = true;
 		try {
@@ -59,6 +71,9 @@
 			if (type === 'csv') {
 				exportToCSV(columns, data, { title, filterSummary });
 				showToast(`Exported ${data.length} rows to CSV!`, 'success');
+			} else if (type === 'excel') {
+				exportToExcel(columns, data, { title, filterSummary });
+				showToast(`Exported ${data.length} rows to Excel!`, 'success');
 			} else {
 				exportToPDF(columns, data, { title, filterSummary });
 				showToast(`Exported ${data.length} rows to PDF!`, 'success');
@@ -72,16 +87,18 @@
 	}
 </script>
 
-<svelte:window onclick={() => (open = false)} onkeydown={handleKeydown} />
+<svelte:window onclick={handleWindowClick} onkeydown={handleKeydown} />
 
-<div class={`relative inline-block ${customClass}`}>
+<div bind:this={root} class={`relative inline-block ${customClass}`}>
 	<button
 		type="button"
 		disabled={disabled || exporting}
 		onclick={toggleDropdown}
-		class="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 shadow-xs hover:bg-gray-50 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
+		class={buttonClass ||
+			'inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 shadow-xs hover:bg-gray-50 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800'}
 		aria-haspopup="true"
 		aria-expanded={open}
+		data-testid="export-button"
 	>
 		{#if exporting}
 			<svg class="h-4 w-4 animate-spin text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24">
@@ -117,10 +134,21 @@
 
 			<button
 				type="button"
-				onclick={() => void handleExport('csv')}
+				onclick={() => void handleExport('excel')}
 				class="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-xs font-medium text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800/60"
 			>
 				<svg class="h-4 w-4 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M1.875 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-7.5-3.75v3.75m0 0h7.5m-7.5 0v3.75m0 0h7.5" />
+				</svg>
+				<span>Export as Excel</span>
+			</button>
+
+			<button
+				type="button"
+				onclick={() => void handleExport('csv')}
+				class="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-xs font-medium text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800/60"
+			>
+				<svg class="h-4 w-4 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M1.875 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-7.5-3.75v3.75m0 0h7.5m-7.5 0v3.75m0 0h7.5" />
 				</svg>
 				<span>Export as CSV</span>

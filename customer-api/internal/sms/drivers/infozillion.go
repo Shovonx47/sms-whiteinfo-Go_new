@@ -44,13 +44,22 @@ func (d *InfozillionDriver) Send(ctx context.Context, req sms.SmsRequest) (sms.S
 	var data map[string]any
 	_ = json.Unmarshal(respBytes, &data)
 
+	report := d.reportSnapshot(payload, data)
 	serverCode := fmt.Sprintf("%v", data["serverResponseCode"])
 	if statusCode >= 400 || serverCode != "9000" {
 		errMsg := getString(data, "serverResponseMessage", fmt.Sprintf("HTTP %d error", statusCode))
 		return sms.SmsResponse{
-			Successful:   false,
-			ErrorMessage: errMsg,
-			Raw:          data,
+			Successful:         false,
+			ErrorMessage:       errMsg,
+			Raw:                data,
+			BillMsisdn:         report.billMsisdn,
+			SmsType:            report.smsType,
+			Channel:            report.channel,
+			ServerTxnID:        report.serverTxnID,
+			ServerResponseCode: report.serverResponseCode,
+			MnoTxnID:           report.mnoTxnID,
+			MnoResponseCode:    report.mnoResponseCode,
+			MnoResponseMessage: report.mnoResponseMessage,
 		}, nil
 	}
 
@@ -60,10 +69,67 @@ func (d *InfozillionDriver) Send(ctx context.Context, req sms.SmsRequest) (sms.S
 	}
 
 	return sms.SmsResponse{
-		Successful:       true,
-		GatewayMessageId: txnID,
-		Raw:              data,
+		Successful:         true,
+		GatewayMessageId:   txnID,
+		Raw:                data,
+		BillMsisdn:         report.billMsisdn,
+		SmsType:            report.smsType,
+		Channel:            report.channel,
+		ServerTxnID:        report.serverTxnID,
+		ServerResponseCode: report.serverResponseCode,
+		MnoTxnID:           report.mnoTxnID,
+		MnoResponseCode:    report.mnoResponseCode,
+		MnoResponseMessage: report.mnoResponseMessage,
 	}, nil
+}
+
+type infoZillionReportSnapshot struct {
+	billMsisdn         string
+	smsType            string
+	channel            string
+	serverTxnID        string
+	serverResponseCode string
+	mnoTxnID           string
+	mnoResponseCode    string
+	mnoResponseMessage string
+}
+
+// reportSnapshot captures the values the report table shows, mirroring the
+// request that was actually sent and the provider's reply.
+func (d *InfozillionDriver) reportSnapshot(payload map[string]any, data map[string]any) infoZillionReportSnapshot {
+	snapshot := infoZillionReportSnapshot{
+		billMsisdn: scalarString(payload["billMsisdn"]),
+		smsType:    strings.ToUpper(scalarString(payload["transactionType"])),
+		channel:    strings.ToUpper(strings.TrimSpace(getString(d.credentials, "api_type", ""))),
+	}
+	if data != nil {
+		snapshot.serverTxnID = scalarString(data["serverTxnId"])
+		snapshot.serverResponseCode = scalarString(data["serverResponseCode"])
+		snapshot.mnoTxnID = scalarString(data["mnoTxnId"])
+		snapshot.mnoResponseCode = scalarString(data["mnoResponseCode"])
+		snapshot.mnoResponseMessage = scalarString(data["mnoResponseMessage"])
+	}
+
+	return snapshot
+}
+
+func scalarString(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case float64:
+		if v == float64(int64(v)) {
+			return fmt.Sprintf("%d", int64(v))
+		}
+		return fmt.Sprintf("%v", v)
+	case bool:
+		return fmt.Sprintf("%v", v)
+	}
+
+	return ""
 }
 
 func (d *InfozillionDriver) SendBulk(ctx context.Context, req sms.BulkSmsRequest) (sms.BulkSmsResponse, error) {

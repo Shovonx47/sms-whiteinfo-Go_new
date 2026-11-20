@@ -32,9 +32,26 @@
 
 	// Pagination
 	let currentPage = $state(1);
-	let perPage = $state(25);
+	let perPage = $state(10);
 	let totalRecords = $state(0);
 	let totalPages = $derived(Math.ceil(totalRecords / perPage) || 1);
+	let pageNumbers = $derived.by(() => {
+		const start = Math.max(1, Math.min(currentPage - 2, totalPages - 4));
+		const end = Math.min(totalPages, start + 4);
+		return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+	});
+
+	function goToPage(page: number) {
+		if (page < 1 || page > totalPages || page === currentPage) return;
+		currentPage = page;
+		loadHistory();
+	}
+
+	function changePerPage(value: number) {
+		perPage = value;
+		currentPage = 1;
+		loadHistory();
+	}
 
 	async function loadHistory() {
 		loading = true;
@@ -248,38 +265,56 @@
 		</div>
 
 		<!-- Pagination -->
-		{#if totalPages > 1}
-			<div class="flex items-center justify-between border-t border-gray-100 px-4 py-3 dark:border-gray-800">
-				<p class="text-xs text-gray-500">
-					Page <strong class="font-semibold text-gray-900 dark:text-white">{currentPage}</strong> of <strong class="font-semibold text-gray-900 dark:text-white">{totalPages}</strong>
+		{#if totalRecords > 0}
+			<div class="flex flex-col gap-3 border-t border-gray-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between dark:border-gray-800">
+				<p class="text-xs text-gray-500 dark:text-gray-400">
+					Showing {(currentPage - 1) * perPage + 1}–{Math.min(currentPage * perPage, totalRecords)} of <strong class="font-semibold text-gray-900 dark:text-white">{totalRecords}</strong>
 				</p>
-				<div class="flex items-center gap-1.5">
-					<button
-						type="button"
-						onclick={() => {
-							if (currentPage > 1) {
-								currentPage--;
-								loadHistory();
-							}
-						}}
-						disabled={currentPage <= 1}
-						class="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-					>
-						Previous
-					</button>
-					<button
-						type="button"
-						onclick={() => {
-							if (currentPage < totalPages) {
-								currentPage++;
-								loadHistory();
-							}
-						}}
-						disabled={currentPage >= totalPages}
-						class="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-					>
-						Next
-					</button>
+
+				<div class="flex flex-wrap items-center gap-3">
+					<div class="flex items-center gap-1.5">
+						<span class="text-xs text-gray-500 dark:text-gray-400">Per page</span>
+						<select
+							value={perPage}
+							onchange={(e) => changePerPage(Number(e.currentTarget.value))}
+							class="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 focus:border-emerald-500 focus:outline-hidden dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+						>
+							{#each [10, 25, 50] as size (size)}
+								<option value={size}>{size}</option>
+							{/each}
+						</select>
+					</div>
+
+					<div class="flex items-center gap-1">
+						<button
+							type="button"
+							onclick={() => goToPage(currentPage - 1)}
+							disabled={currentPage <= 1 || loading}
+							class="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+						>
+							Previous
+						</button>
+						{#each pageNumbers as pageNumber (pageNumber)}
+							<button
+								type="button"
+								onclick={() => goToPage(pageNumber)}
+								disabled={loading}
+								class="min-w-7 rounded-md border px-2.5 py-1 text-xs font-semibold transition {pageNumber === currentPage
+									? 'border-emerald-600 bg-emerald-50 text-emerald-700 dark:border-emerald-500 dark:bg-emerald-950/40 dark:text-emerald-300'
+									: 'border-gray-200 text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800'}"
+							>
+								{pageNumber}
+							</button>
+						{/each}
+						<button
+							type="button"
+							onclick={() => goToPage(currentPage + 1)}
+							disabled={currentPage >= totalPages || loading}
+							class="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+						>
+							Next
+						</button>
+					</div>
 				</div>
 			</div>
 		{/if}

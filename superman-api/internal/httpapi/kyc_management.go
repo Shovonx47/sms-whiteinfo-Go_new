@@ -130,8 +130,8 @@ func (server *Server) kycDashboard(context fiber.Ctx) error {
 			COALESCE(SUM(CASE WHEN kyc_status = 'verified' THEN 1 ELSE 0 END), 0) as verified,
 			COALESCE(SUM(CASE WHEN kyc_status = 'rejected' THEN 1 ELSE 0 END), 0) as rejected,
 			COALESCE(SUM(CASE WHEN kyc_status = 'resubmit_required' THEN 1 ELSE 0 END), 0) as resubmit_required,
-			COALESCE(SUM(CASE WHEN DATE(kyc_submitted_at) = CURDATE() THEN 1 ELSE 0 END), 0) as today_submissions,
-			COALESCE(SUM(CASE WHEN DATE(kyc_verified_at) = CURDATE() THEN 1 ELSE 0 END), 0) as today_approved
+			COALESCE(SUM(CASE WHEN DATE(kyc_submitted_at) = CURRENT_DATE THEN 1 ELSE 0 END), 0) as today_submissions,
+			COALESCE(SUM(CASE WHEN DATE(kyc_verified_at) = CURRENT_DATE THEN 1 ELSE 0 END), 0) as today_approved
 		FROM users
 		WHERE type = 'customer' AND deleted_at IS NULL AND (kyc_status IS NOT NULL AND kyc_status != '')
 	`).Scan(

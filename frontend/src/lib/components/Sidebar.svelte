@@ -22,6 +22,9 @@
 			section: 'Messaging Management',
 			icon: 'chat-bubbles',
 			items: [
+				{ label: 'Quick SMS', href: '/messaging/messages/quick' },
+				{ label: 'Bulk SMS', href: '/messaging/messages/bulk' },
+				{ label: 'Smart SMS', href: '/messaging/messages/smart' },
 				{ label: 'Live Queue', href: '/messaging/live-queue' },
 				{ label: 'Sender ID List', href: '/messaging/senders' },
 				{ label: 'Bulk SMS Templates', href: '/messaging/templates' },

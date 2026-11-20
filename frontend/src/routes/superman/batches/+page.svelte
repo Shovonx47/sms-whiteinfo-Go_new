@@ -12,6 +12,8 @@
 		status: string;
 		approval: string;
 		total_recipients: number;
+		valid_count: number;
+		invalid_count: number;
 		remaining: number;
 		progress_percent: number;
 		created_at: string;
@@ -44,7 +46,9 @@
 		{ header: 'Sender ID', getValue: (b) => b.sender_id },
 		{ header: 'Source', getValue: (b) => b.source.toUpperCase() },
 		{ header: 'Total Recipients', getValue: (b) => b.total_recipients },
-		{ header: 'Progress', getValue: (b) => `${b.progress_percent}%` },
+		{ header: 'Valid', getValue: (b) => b.valid_count ?? 0 },
+		{ header: 'Invalid', getValue: (b) => b.invalid_count ?? 0 },
+		{ header: 'Progress', getValue: (b) => `${b.progress_percent ?? 0}%` },
 		{ header: 'Approval', getValue: (b) => b.approval.toUpperCase() },
 		{ header: 'Status', getValue: (b) => b.status.toUpperCase() },
 		{ header: 'Created Date', getValue: (b) => new Date(b.created_at).toLocaleString() }
@@ -91,9 +95,12 @@
 							<th class="px-4 py-3">Customer</th>
 							<th class="px-4 py-3">Sender ID</th>
 							<th class="px-4 py-3">Source Channel</th>
+							<th class="px-4 py-3">Status</th>
 							<th class="px-4 py-3">Recipients</th>
+							<th class="px-4 py-3">Valid</th>
+							<th class="px-4 py-3">Invalid</th>
 							<th class="px-4 py-3">Progress</th>
-							<th class="px-4 py-3">Approval Status</th>
+							<th class="px-4 py-3">Approval</th>
 							<th class="px-4 py-3 text-right">Created</th>
 						</tr>
 					</thead>
@@ -103,13 +110,20 @@
 								<td class="px-4 py-3 font-semibold text-gray-950 dark:text-white">{b.customer}</td>
 								<td class="px-4 py-3 font-mono font-medium">{b.sender_id || 'Default'}</td>
 								<td class="px-4 py-3 uppercase text-[11px] text-gray-500">{b.source || 'Web Portal'}</td>
+								<td class="px-4 py-3">
+									<span class="inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase {b.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : b.status === 'failed' ? 'bg-rose-50 text-rose-700' : 'bg-blue-50 text-blue-700'}">
+										{b.status || 'pending'}
+									</span>
+								</td>
 								<td class="px-4 py-3 font-medium text-gray-900 dark:text-white">{b.total_recipients} msgs</td>
+								<td class="px-4 py-3 text-emerald-600">{b.valid_count ?? 0}</td>
+								<td class="px-4 py-3 text-rose-600">{b.invalid_count ?? 0}</td>
 								<td class="px-4 py-3 w-44">
 									<div class="flex items-center gap-2">
 										<div class="h-2 w-full rounded-full bg-gray-100 overflow-hidden dark:bg-gray-800">
-											<div class="h-full bg-emerald-500 rounded-full" style="width: {b.progress_percent || 100}%"></div>
+											<div class="h-full bg-emerald-500 rounded-full" style="width: {b.progress_percent ?? 0}%"></div>
 										</div>
-										<span class="text-[10px] font-bold text-gray-600 dark:text-gray-400">{b.progress_percent || 100}%</span>
+										<span class="text-[10px] font-bold text-gray-600 dark:text-gray-400">{b.progress_percent ?? 0}%</span>
 									</div>
 								</td>
 								<td class="px-4 py-3">

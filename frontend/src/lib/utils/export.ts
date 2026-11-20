@@ -11,6 +11,8 @@ export interface ExportOptions {
 	title: string;
 	filename?: string;
 	filterSummary?: string;
+	/** Optional label/value tiles printed above the table (PDF only). */
+	summary?: { label: string; value: string }[];
 }
 
 /**
@@ -72,7 +74,7 @@ export function formatCsvCell(str: string): string {
  * Generate formatted filename with timestamp
  * e.g. "gateways_2026-10-31_14-58.csv"
  */
-export function generateFilename(title: string, extension: 'csv' | 'pdf'): string {
+export function generateFilename(title: string, extension: 'csv' | 'pdf' | 'xls'): string {
 	const sanitized = title
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, '-')
@@ -138,6 +140,82 @@ export function exportToCSV<T>(
 	URL.revokeObjectURL(url);
 }
 
+function escapeXml(value: string): string {
+	return value
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&apos;');
+}
+
+/**
+ * Export table data to an Excel-compatible SpreadsheetML workbook (.xls)
+ */
+export function exportToExcel<T>(
+	columns: ExportColumn<T>[],
+	data: T[],
+	options: ExportOptions
+): void {
+	if (!data || data.length === 0) {
+		throw new Error('No data available to export.');
+	}
+
+	const validColumns = columns.filter((col) => col.header && col.header.toLowerCase() !== 'actions');
+
+	const headerXml = validColumns
+		.map((col) => `<Cell ss:StyleID="Header"><Data ss:Type="String">${escapeXml(col.header)}</Data></Cell>`)
+		.join('');
+
+	const rowsXml = data
+		.map((row) => {
+			const cells = validColumns
+				.map((col) => {
+					const raw = col.getValue
+						? col.getValue(row)
+						: col.key && typeof row === 'object' && row !== null
+							? (row as any)[col.key]
+							: '';
+					const text = formatCellValue(raw, true).replace(/৳/g, 'BDT ');
+					return `<Cell><Data ss:Type="String">${escapeXml(text)}</Data></Cell>`;
+				})
+				.join('');
+			return `<Row>${cells}</Row>`;
+		})
+		.join('');
+
+	const sheetName = escapeXml((options.title || 'Report').replace(/[\\/?*\[\]:]/g, ' ').trim().slice(0, 31) || 'Report');
+	const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Styles>
+  <Style ss:ID="Header">
+   <Font ss:Bold="1" ss:Color="#111827"/>
+   <Interior ss:Color="#F3F4F6" ss:Pattern="Solid"/>
+  </Style>
+ </Styles>
+ <Worksheet ss:Name="${sheetName}">
+  <Table>
+   <Row>${headerXml}</Row>
+   ${rowsXml}
+  </Table>
+ </Worksheet>
+</Workbook>`;
+
+	const blob = new Blob(['\uFEFF' + xml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+	const filename = options.filename || generateFilename(options.title, 'xls');
+
+	const link = document.createElement('a');
+	const url = URL.createObjectURL(blob);
+	link.setAttribute('href', url);
+	link.setAttribute('download', filename);
+	document.body.appendChild(link);
+	link.click();
+	document.body.removeChild(link);
+	URL.revokeObjectURL(url);
+}
+
 /**
  * Export table data to PDF file and trigger download
  */
@@ -184,6 +262,29 @@ export function exportToPDF<T>(
 	doc.setLineWidth(0.75);
 	doc.line(40, 58, pageWidth - 40, 58);
 
+	// Optional summary tiles
+	let tableStartY = 68;
+	if (options.summary && options.summary.length > 0) {
+		const tiles = options.summary;
+		const gap = 8;
+		const tileWidth = (pageWidth - 80 - gap * (tiles.length - 1)) / tiles.length;
+		tiles.forEach((tile, index) => {
+			const x = 40 + index * (tileWidth + gap);
+			doc.setDrawColor(229, 231, 235);
+			doc.setFillColor(249, 250, 251);
+			doc.roundedRect(x, 68, tileWidth, 38, 4, 4, 'FD');
+			doc.setFont('helvetica', 'normal');
+			doc.setFontSize(7);
+			doc.setTextColor(107, 114, 128);
+			doc.text(tile.label.toUpperCase(), x + 8, 81);
+			doc.setFont('helvetica', 'bold');
+			doc.setFontSize(11);
+			doc.setTextColor(17, 24, 39);
+			doc.text(tile.value, x + 8, 98);
+		});
+		tableStartY = 120;
+	}
+
 	// Table headers and rows
 	const head = [validColumns.map((col) => col.header)];
 	const body = data.map((row) => {
@@ -202,7 +303,7 @@ export function exportToPDF<T>(
 	});
 
 	autoTable(doc, {
-		startY: 68,
+		startY: tableStartY,
 		margin: { left: 40, right: 40, top: 40, bottom: 40 },
 		head,
 		body,

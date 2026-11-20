@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/time/rate"
 	"smswhiteinfo/customer-api/internal/billing"
 	"smswhiteinfo/customer-api/internal/crypto"
@@ -292,9 +294,12 @@ func (p *SendWorkerPool) sendSingleMessage(ctx context.Context, mid int64, to, b
 			failMsg = resp.ErrorMessage
 		}
 
+		p.storeMessageReport(ctx, mid, resp)
 		_, _ = billing.RefundMessageFailed(ctx, p.db, mid, "sending", failMsg)
 		return
 	}
+
+	p.storeMessageReport(ctx, mid, resp)
 
 	// Success: transition to 'sent'
 	now := time.Now()
@@ -310,6 +315,50 @@ func (p *SendWorkerPool) sendSingleMessage(ctx context.Context, mid int64, to, b
 		SET gateway_id = ?, status = 'sent', sent_at = ?, gateway_message_id = ?, poll_attempt = 1, next_poll_at = ?, updated_at = ?
 		WHERE id = ? AND status = 'sending'
 	`, gwID, now, gwMsgID, nextPoll, now, mid)
+}
+
+// storeMessageReport keeps the gateway snapshot the SMS Reports table shows.
+// The report columns come from database/migrations/2026_11_19_add_sms_report_fields_to_messages.sql;
+// a database without them keeps sending, it just cannot show the extra columns.
+func (p *SendWorkerPool) storeMessageReport(ctx context.Context, mid int64, resp sms.SmsResponse) {
+	var providerResponse any
+	if resp.Raw != nil {
+		if encoded, err := json.Marshal(resp.Raw); err == nil {
+			providerResponse = string(encoded)
+		}
+	}
+
+	_, err := p.db.ExecContext(ctx, `
+		UPDATE messages
+		SET request_id = ?, bill_msisdn = ?, sms_type = ?, channel = ?,
+		    server_txn_id = ?, server_response_code = ?, mno_txn_id = ?, mno_response_code = ?,
+		    mno_response_message = ?, provider_response = ?, updated_at = NOW()
+		WHERE id = ? AND request_id IS NULL
+	`,
+		uuid.NewString(),
+		nullableReportValue(resp.BillMsisdn),
+		nullableReportValue(resp.SmsType),
+		nullableReportValue(resp.Channel),
+		nullableReportValue(resp.ServerTxnID),
+		nullableReportValue(resp.ServerResponseCode),
+		nullableReportValue(resp.MnoTxnID),
+		nullableReportValue(resp.MnoResponseCode),
+		nullableReportValue(resp.MnoResponseMessage),
+		providerResponse,
+		mid,
+	)
+	if err != nil {
+		log.Printf("[SEND WORKER] could not store the gateway report snapshot for message %d: %v", mid, err)
+	}
+}
+
+func nullableReportValue(value string) any {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+
+	return value
 }
 
 // ProcessMessageByID claims a single message and dispatches it via the worker pool.

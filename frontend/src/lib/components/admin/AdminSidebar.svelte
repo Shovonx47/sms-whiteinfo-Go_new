@@ -22,7 +22,7 @@
 
 	let currentPath = $derived($page.url.pathname);
 
-	// Heroicons v2 (outline) paths, matching the icons used by the original Filament panel.
+	// Heroicons v2 (outline) paths matching the Filament Admin Superman panel
 	const icons: Record<string, string> = {
 		bolt: `<path stroke-linecap="round" stroke-linejoin="round" d="m3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" />`,
 		user: `<path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />`,
@@ -33,7 +33,9 @@
 		'document-text': `<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />`,
 		'chart-bar': `<path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />`,
 		'chat-bubble': `<path stroke-linecap="round" stroke-linejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 0 1-.825-.242m9.345-8.334a2.126 2.126 0 0 0-.476-.095 48.64 48.64 0 0 0-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0 0 11.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155" />`,
+		'chat-bubble-oval': `<path stroke-linecap="round" stroke-linejoin="round" d="M12 20.25c4.97 0 9-3.694 9-8.25s-4.03-8.25-9-8.25S3 7.444 3 12c0 2.104.859 4.023 2.273 5.48.432.447.74 1.04.586 1.641a4.483 4.483 0 0 1-.923 1.785A5.969 5.969 0 0 0 6 21c1.282 0 2.47-.402 3.445-1.087.81.22 1.668.337 2.555.337Z" />`,
 		users: `<path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />`,
+		'user-plus': `<path stroke-linecap="round" stroke-linejoin="round" d="M18 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0ZM3 19.235v-.11a6.375 6.375 0 0 1 12.75 0v.109A12.318 12.318 0 0 1 9.374 21c-2.331 0-4.512-.645-6.374-1.765Z" />`,
 		cog: `<path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12a7.5 7.5 0 0 0 15 0m-15 0a7.5 7.5 0 1 1 15 0m-15 0H3m16.5 0H21m-1.5 0H12m-8.457 3.077 1.41-.513m14.095-5.13 1.41-.513M5.106 17.785l1.15-.964m11.49-9.642 1.149-.964M7.501 19.795l.75-1.3m7.5-12.99.75-1.3m-6.063 16.658.26-1.477m2.605-14.772.26-1.477m0 17.726-.26-1.477M10.698 4.614l-.26-1.477M16.5 19.794l-.75-1.299M7.5 4.205 12 12m6.894 5.785-1.149-.964M6.256 7.178l-1.15-.964m15.352 8.864-1.41-.513M4.954 9.435l-1.41-.514M12.002 12l-3.75 6.495" />`,
 		'clipboard-check': `<path stroke-linecap="round" stroke-linejoin="round" d="M11.35 3.836c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-.1-.664m-5.8 0A2.251 2.251 0 0 1 13.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m8.9-4.414c.376.023.75.05 1.124.08 1.131.094 1.976 1.057 1.976 2.192V16.5A2.25 2.25 0 0 1 18 18.75h-2.25m-7.5-10.5H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V18.75m-7.5-10.5h6.375c.621 0 1.125.504 1.125 1.125v9.375m-8.25-3 1.5 1.5 3-3.75" />`,
 		'document-magnifying-glass': `<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m5.231 13.481L15 17.25m-4.5-15H5.625c-.621 0-1.125.504-1.125 1.125v16.5c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Zm3.75 11.625a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />`,
@@ -42,7 +44,17 @@
 		'shield-check': `<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />`,
 		'computer-desktop': `<path stroke-linecap="round" stroke-linejoin="round" d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 12V5.25" />`,
 		'arrows-right-left': `<path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />`,
-		'clipboard-document': `<path stroke-linecap="round" stroke-linejoin="round" d="M8.25 7.5V6.108c0-1.135.845-2.098 1.976-2.192.373-.03.748-.057 1.123-.08M15.75 18H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08M15.75 18.75v-1.875a3.375 3.375 0 0 0-3.375-3.375h-1.5a1.125 1.125 0 0 1-1.125-1.125v-1.5A3.375 3.375 0 0 0 6.375 7.5H5.25m11.9-3.664A2.251 2.251 0 0 0 15 2.25h-1.5a2.251 2.251 0 0 0-2.15 1.586m5.8 0c.065.21.1.433.1.664v.75h-6V4.5c0-.231.035-.454.1-.664M6.75 7.5H4.875c-.621 0-1.125.504-1.125 1.125v12c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V16.5a9 9 0 0 0-9-9Z" />`
+		'clipboard-document': `<path stroke-linecap="round" stroke-linejoin="round" d="M8.25 7.5V6.108c0-1.135.845-2.098 1.976-2.192.373-.03.748-.057 1.123-.08M15.75 18H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08M15.75 18.75v-1.875a3.375 3.375 0 0 0-3.375-3.375h-1.5a1.125 1.125 0 0 1-1.125-1.125v-1.5A3.375 3.375 0 0 0 6.375 7.5H5.25m11.9-3.664A2.251 2.251 0 0 0 15 2.25h-1.5a2.251 2.251 0 0 0-2.15 1.586m5.8 0c.065.21.1.433.1.664v.75h-6V4.5c0-.231.035-.454.1-.664M6.75 7.5H4.875c-.621 0-1.125.504-1.125 1.125v12c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V16.5a9 9 0 0 0-9-9Z" />`,
+		'globe-alt': `<path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" />`,
+		megaphone: `<path stroke-linecap="round" stroke-linejoin="round" d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" />`,
+		'currency-dollar': `<path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />`,
+		'check-circle': `<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />`,
+		inbox: `<path stroke-linecap="round" stroke-linejoin="round" d="M2.25 13.5h3.86a2.25 2.25 0 0 1 2.012 1.244l.256.512a2.25 2.25 0 0 0 2.013 1.244h3.238a2.25 2.25 0 0 0 2.013-1.244l.256-.512a2.25 2.25 0 0 1 2.013-1.244h3.859m-19.5.338V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18v-4.162c0-.224-.034-.447-.1-.661L19.24 5.338a2.25 2.25 0 0 0-2.15-1.588H6.911a2.25 2.25 0 0 0-2.15 1.588L2.35 13.177a2.25 2.25 0 0 0-.1.661Z" />`,
+		bell: `<path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />`,
+		banknotes: `<path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 0 0-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 0 1-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 0 0 3 15h-.75M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm3 0h.008v.008H18V10.5Zm-12 0h.008v.008H6V10.5Z" />`,
+		briefcase: `<path stroke-linecap="round" stroke-linejoin="round" d="M20.25 14.15v4.25c0 1.094-.787 2.036-1.872 2.18-2.087.277-4.216.42-6.378.42s-4.291-.143-6.378-.42c-1.085-.144-1.872-1.086-1.872-2.18v-4.25m16.5 0a2.18 2.18 0 0 0 .75-1.661V8.706c0-1.081-.768-2.015-1.837-2.175a48.114 48.114 0 0 0-3.413-.387m4.5 8.006c-.194.165-.42.295-.673.38A23.978 23.978 0 0 1 12 15.75c-2.648 0-5.195-.429-7.577-1.22a2.016 2.016 0 0 1-.673-.38m0 0A2.18 2.18 0 0 1 3 12.489V8.706c0-1.081.768-2.015 1.837-2.175a48.111 48.111 0 0 1 3.413-.387m7.5 0V5.25A2.25 2.25 0 0 0 13.5 3h-3a2.25 2.25 0 0 0-2.25 2.25v1.844m7.5 0a48.667 48.667 0 0 0-7.5 0" />`,
+		'code-bracket': `<path stroke-linecap="round" stroke-linejoin="round" d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5" />`,
+		'book-open': `<path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />`
 	};
 
 	function iconFor(icon: string): string {
@@ -63,6 +75,7 @@
 		items?: NavigationItem[];
 	}
 
+	// All 32 Filament Navigation Groups + Live Dashboard matching sms.whiteinfobd.com exactly
 	const navSections: NavigationSection[] = [
 		{
 			id: 'live_dashboard',
@@ -164,7 +177,7 @@
 			items: [
 				{ label: 'Messages', href: '/superman/messages' },
 				{ label: 'Batches', href: '/superman/batches' },
-				{ label: 'Templates', href: '/superman/templates' },
+				{ label: 'Bulk SMS Templates', href: '/superman/templates' },
 				{ label: 'Approvals', href: '/superman/messaging/approvals' }
 			]
 		},
@@ -190,6 +203,195 @@
 			]
 		},
 		{
+			id: 'resellers',
+			label: 'S P',
+			icon: 'building-office',
+			items: [
+				{ label: 'All Resellers', href: '/superman/users/sps' },
+				{ label: 'Sub-Customers', href: '/superman/sps/customers' },
+				{ label: 'Tariff & Rates', href: '/superman/sps/rates' },
+				{ label: 'Reseller Wallets', href: '/superman/sps/wallet' },
+				{ label: 'White-Label Branding', href: '/superman/sps/white-label' },
+				{ label: 'Custom Domains', href: '/superman/sps/custom-domain' },
+				{ label: 'S P Profit', href: '/superman/sps/profit' },
+				{ label: 'Reseller Senders', href: '/superman/sps/senders' },
+				{ label: 'S P Billing', href: '/superman/sps/billing' },
+				{ label: 'Reseller KYC', href: '/superman/sps/kyc' },
+				{ label: 'S P Statements', href: '/superman/sps/statements' },
+				{ label: 'Reseller APIs', href: '/superman/sps/api' },
+				{ label: 'Reseller Audit', href: '/superman/sps/audit' },
+				{ label: 'Reseller Routing', href: '/superman/sps/routing' },
+				{ label: 'Reseller Webhooks', href: '/superman/sps/webhooks' },
+				{ label: 'S P Reports', href: '/superman/sps/reports' },
+				{ label: 'S P Employees', href: '/superman/sps/employees' }
+			]
+		},
+		{
+			id: 'affiliates',
+			label: 'Affiliates',
+			icon: 'user-plus',
+			items: [
+				{ label: 'Affiliate Hub', href: '/superman/affiliates/dashboard' },
+				{ label: 'Affiliate Partners', href: '/superman/affiliates/list' },
+				{ label: 'Commission Rules', href: '/superman/affiliates/commission' },
+				{ label: 'Withdrawals', href: '/superman/affiliates/withdrawals' },
+				{ label: 'Affiliate Reports', href: '/superman/affiliates/reports' },
+				{ label: 'Affiliate Audit', href: '/superman/affiliates/audit' }
+			]
+		},
+		{
+			id: 'sms_management',
+			label: 'SMS Management',
+			icon: 'chat-bubble-oval',
+			items: [
+				{ label: 'All SMS', href: '/superman/sms/all' },
+				{ label: 'SMS Logs', href: '/superman/sms/logs' },
+				{ label: 'Send SMS', href: '/superman/sms/send' },
+				{ label: 'Failed SMS', href: '/superman/sms/failed' },
+				{ label: 'Pending SMS', href: '/superman/sms/pending' },
+				{ label: 'Scheduled SMS', href: '/superman/sms/scheduled' },
+				{ label: 'Bulk SMS Batches', href: '/superman/sms/bulk' },
+				{ label: 'Message Search', href: '/superman/sms/message-search' },
+				{ label: 'Retry Queue', href: '/superman/sms/retry-queue' },
+				{ label: 'SMS Inquiry', href: '/superman/sms/inquiry' }
+			]
+		},
+		{
+			id: 'routing',
+			label: 'Routing',
+			icon: 'arrows-right-left',
+			items: [
+				{ label: 'Routing Control', href: '/superman/routing/dashboard' },
+				{ label: 'Routing Rules', href: '/superman/routing/rules' },
+				{ label: 'Route Plans', href: '/superman/routing/routes' },
+				{ label: 'Route Health', href: '/superman/routing/health' },
+				{ label: 'Failover Audit', href: '/superman/routing/failover' },
+				{ label: 'Route Simulator', href: '/superman/routing/testing' },
+				{ label: 'Load Balancing', href: '/superman/routing/load-balancing' }
+			]
+		},
+		{
+			id: 'bangladesh_network',
+			label: 'Bangladesh Network',
+			icon: 'globe-alt',
+			items: [
+				{ label: 'MNO Management', href: '/superman/bd-network/mno' },
+				{ label: 'Prefix Management', href: '/superman/bd-network/prefix' },
+				{ label: 'Number Validation', href: '/superman/bd-network/number-validation' },
+				{ label: 'MNP Lookup', href: '/superman/bd-network/mnp' },
+				{ label: 'DND Registry', href: '/superman/bd-network/dnd' }
+			]
+		},
+		{
+			id: 'campaigns',
+			label: 'Campaigns',
+			icon: 'megaphone',
+			items: [
+				{ label: 'Campaigns List', href: '/superman/campaigns/list' },
+				{ label: 'Create Campaign', href: '/superman/campaigns/create' },
+				{ label: 'Campaign Reports', href: '/superman/campaigns/reports' }
+			]
+		},
+		{
+			id: 'profit_management',
+			label: 'Profit Management',
+			icon: 'currency-dollar',
+			items: [
+				{ label: 'Global Margin', href: '/superman/profit/global' },
+				{ label: 'Reseller Profit', href: '/superman/profit/reseller' },
+				{ label: 'Customer Profit', href: '/superman/profit/customer' },
+				{ label: 'Trend Analysis', href: '/superman/profit/trend' },
+				{ label: 'Alert Settings', href: '/superman/profit/alerts' }
+			]
+		},
+		{
+			id: 'dlr',
+			label: 'DLR / Delivery',
+			icon: 'check-circle',
+			items: [
+				{ label: 'Live DLR Stream', href: '/superman/dlr/live' },
+				{ label: 'Delivery Logs', href: '/superman/dlr/logs' },
+				{ label: 'DLR Queue', href: '/superman/dlr/queue' },
+				{ label: 'DLR Retry', href: '/superman/dlr/retry' },
+				{ label: 'Delivery Check', href: '/superman/dlr/check' }
+			]
+		},
+		{
+			id: 'mo_inbound',
+			label: 'MO / Inbound',
+			icon: 'inbox',
+			items: [
+				{ label: 'Live Inbound Feed', href: '/superman/mo/messages' },
+				{ label: 'Inbound Logs', href: '/superman/mo/logs' },
+				{ label: 'MO Routing', href: '/superman/mo/routing' },
+				{ label: 'Inbound Analytics', href: '/superman/mo/reports' }
+			]
+		},
+		{
+			id: 'webhooks',
+			label: 'Webhooks',
+			icon: 'bolt',
+			items: [
+				{ label: 'Webhook Inbound Logs', href: '/superman/webhooks/logs' },
+				{ label: 'Failed Webhooks', href: '/superman/webhooks/failed' },
+				{ label: 'Webhook Settings', href: '/superman/webhooks/configuration' },
+				{ label: 'Customer Webhooks', href: '/superman/webhooks/customer' },
+				{ label: 'Reseller Webhooks', href: '/superman/webhooks/reseller' }
+			]
+		},
+		{
+			id: 'monitoring',
+			label: 'Monitoring / NOC',
+			icon: 'computer-desktop',
+			items: [
+				{ label: 'System Health', href: '/superman/monitoring/system-health' },
+				{ label: 'Live Monitoring', href: '/superman/monitoring/live' },
+				{ label: 'Provider Health', href: '/superman/monitoring/providers' },
+				{ label: 'Queue Health', href: '/superman/monitoring/queue-health' },
+				{ label: 'API Health', href: '/superman/monitoring/api-health' },
+				{ label: 'TPS Monitor', href: '/superman/monitoring/tps' }
+			]
+		},
+		{
+			id: 'alerts',
+			label: 'Alerts & Notifications',
+			icon: 'bell',
+			items: [
+				{ label: 'Alerts Overview', href: '/superman/alerts/dashboard' },
+				{ label: 'Alert Settings', href: '/superman/alerts/configuration' },
+				{ label: 'Provider Outages', href: '/superman/alerts/provider-down' }
+			]
+		},
+		{
+			id: 'payment_gateway',
+			label: 'Payment Gateway',
+			icon: 'banknotes',
+			items: [
+				{ label: 'Global Payment Gateways', href: '/superman/payment-gateways/gateways' },
+				{ label: 'Payment Transactions', href: '/superman/payment-gateways/transactions' },
+				{ label: 'Payment Reports', href: '/superman/payment-gateways/reports' },
+				{ label: 'Gateway Reconciliation', href: '/superman/payment-gateways/reconciliation' }
+			]
+		},
+		{
+			id: 'employees',
+			label: 'Employees',
+			icon: 'briefcase',
+			items: [
+				{ label: 'Staff & Employees', href: '/superman/employees/list' },
+				{ label: 'Staff Sessions', href: '/superman/employees/sessions' }
+			]
+		},
+		{
+			id: 'roles_permissions',
+			label: 'Roles & Permissions',
+			icon: 'shield-check',
+			items: [
+				{ label: 'Roles', href: '/superman/roles-permissions/roles' },
+				{ label: 'Permissions', href: '/superman/roles-permissions/permissions' }
+			]
+		},
+		{
 			id: 'approval_center',
 			label: 'Approval Center',
 			icon: 'clipboard-check',
@@ -198,7 +400,40 @@
 				{ label: 'Pending Customers', href: '/superman/approvals/customers' },
 				{ label: 'Pending Resellers', href: '/superman/approvals/resellers' },
 				{ label: 'Pending Senders', href: '/superman/approvals/senders' },
-				{ label: 'IP Whitelists', href: '/superman/approval-center/ip-whitelists' }
+				{ label: 'IP Whitelist Requests', href: '/superman/approval-center/ip-whitelists' }
+			]
+		},
+		{
+			id: 'audit_logs',
+			label: 'Audit & Activity Logs',
+			icon: 'clipboard-document',
+			items: [
+				{ label: 'Global Audit Log', href: '/superman/audit-logs/global' },
+				{ label: 'IP Whitelist Audit', href: '/superman/audit-logs/ip-whitelist' },
+				{ label: 'Employee Activity', href: '/superman/audit-logs/employees' },
+				{ label: 'Security Activity', href: '/superman/audit-logs/security' }
+			]
+		},
+		{
+			id: 'api_management',
+			label: 'API Management',
+			icon: 'code-bracket',
+			items: [
+				{ label: 'API Accounts', href: '/superman/api-management/accounts' },
+				{ label: 'API Tokens', href: '/superman/api-management/keys' },
+				{ label: 'API Traffic Logs', href: '/superman/api-management/logs' },
+				{ label: 'API Security Policy', href: '/superman/api-management/security' }
+			]
+		},
+		{
+			id: 'security',
+			label: 'Security & Fraud Control',
+			icon: 'shield-check',
+			items: [
+				{ label: 'Security Dashboard', href: '/superman/security/dashboard' },
+				{ label: 'IP Whitelist Policy', href: '/superman/security/ip-whitelist' },
+				{ label: 'Fraud Rules', href: '/superman/security/fraud-rules' },
+				{ label: 'Security Logs', href: '/superman/security/logs' }
 			]
 		},
 		{
@@ -230,77 +465,10 @@
 			]
 		},
 		{
-			id: 'resellers',
-			label: 'S P',
-			icon: 'building-office',
-			items: [
-				{ label: 'All Resellers', href: '/superman/users/sps' },
-				{ label: 'Sub-Customers', href: '/superman/sps/customers' },
-				{ label: 'Tariff & Rates', href: '/superman/sps/rates' },
-				{ label: 'Reseller Wallets', href: '/superman/sps/wallet' },
-				{ label: 'White-Label Branding', href: '/superman/sps/white-label' },
-				{ label: 'Custom Domains', href: '/superman/sps/custom-domain' },
-				{ label: 'S P Profit', href: '/superman/sps/profit' },
-				{ label: 'Reseller Senders', href: '/superman/sps/senders' },
-				{ label: 'S P Billing', href: '/superman/sps/billing' },
-				{ label: 'Reseller KYC', href: '/superman/sps/kyc' },
-				{ label: 'S P Statements', href: '/superman/sps/statements' },
-				{ label: 'Reseller APIs', href: '/superman/sps/api' },
-				{ label: 'Reseller Audit', href: '/superman/sps/audit' },
-				{ label: 'Reseller Routing', href: '/superman/sps/routing' },
-				{ label: 'Reseller Webhooks', href: '/superman/sps/webhooks' },
-				{ label: 'S P Reports', href: '/superman/sps/reports' },
-				{ label: 'S P Employees', href: '/superman/sps/employees' }
-			]
-		},
-		{
-			id: 'security',
-			label: 'Security & Fraud Control',
-			icon: 'shield-check',
-			items: [
-				{ label: 'Security Dashboard', href: '/superman/security/dashboard' },
-				{ label: 'IP Whitelist Policy', href: '/superman/security/ip-whitelist' },
-				{ label: 'Fraud Rules', href: '/superman/security/fraud-rules' },
-				{ label: 'Security Logs', href: '/superman/security/logs' }
-			]
-		},
-		{
-			id: 'monitoring',
-			label: 'Monitoring / NOC',
-			icon: 'computer-desktop',
-			items: [
-				{ label: 'System Health', href: '/superman/monitoring/system-health' },
-				{ label: 'Live Monitoring', href: '/superman/monitoring/live' },
-				{ label: 'Provider Health', href: '/superman/monitoring/providers' },
-				{ label: 'Queue Health', href: '/superman/monitoring/queue-health' },
-				{ label: 'API Health', href: '/superman/monitoring/api-health' },
-				{ label: 'TPS Monitor', href: '/superman/monitoring/tps' }
-			]
-		},
-		{
-			id: 'routing',
-			label: 'Routing',
-			icon: 'arrows-right-left',
-			items: [
-				{ label: 'Routing Control', href: '/superman/routing/dashboard' },
-				{ label: 'Routing Rules', href: '/superman/routing/rules' },
-				{ label: 'Route Plans', href: '/superman/routing/routes' },
-				{ label: 'Route Health', href: '/superman/routing/health' },
-				{ label: 'Failover Audit', href: '/superman/routing/failover' },
-				{ label: 'Route Simulator', href: '/superman/routing/testing' },
-				{ label: 'Load Balancing', href: '/superman/routing/load-balancing' }
-			]
-		},
-		{
-			id: 'audit_logs',
-			label: 'Audit & Activity Logs',
-			icon: 'clipboard-document',
-			items: [
-				{ label: 'Global Audit Log', href: '/superman/audit-logs/global' },
-				{ label: 'IP Whitelist Audit', href: '/superman/audit-logs/ip-whitelist' },
-				{ label: 'Employee Activity', href: '/superman/audit-logs/employees' },
-				{ label: 'Security Activity', href: '/superman/audit-logs/security' }
-			]
+			id: 'api_documentation',
+			label: 'API Documentation',
+			href: '/superman/api-docs',
+			icon: 'book-open'
 		}
 	];
 
@@ -320,7 +488,7 @@
 </script>
 
 <aside
-	class="flex flex-col border-r border-gray-200/80 bg-white transition-all duration-300 dark:border-gray-800 dark:bg-gray-900 shrink-0 select-none h-screen {collapsed ? 'w-16' : 'w-[280px] lg:w-[300px]'}"
+	class="flex flex-col border-r border-gray-200/80 bg-white transition-all duration-300 dark:border-gray-800 dark:bg-gray-900 shrink-0 select-none h-full {collapsed ? 'w-16' : 'w-[280px] lg:w-[300px]'}"
 >
 	<!-- Logo at the very top of the sidebar -->
 	<div class="flex h-16 shrink-0 items-center border-b border-gray-200/80 px-3 dark:border-gray-800 {collapsed ? 'justify-center' : 'justify-between'}">
@@ -363,7 +531,7 @@
 	<div class="flex-1 overflow-y-auto px-3 py-3 space-y-1">
 		{#each navSections as section}
 			{#if section.href}
-				<!-- Direct link (like Live Dashboard) -->
+				<!-- Direct link (like Live Dashboard or API Docs) -->
 				<a
 					href={section.href}
 					class="group flex items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition-colors {isPathActive(section.href)
